@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChangeBorder,
+  CHANGE_BORDER_STYLE_LIST,
   changeBorderDurationMs,
   toChangeBorderStyle,
   type ChangeBorderStyle,
@@ -408,7 +409,7 @@ export default function ScreenStatusSettingsPage() {
                 }
                 className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm capitalize disabled:opacity-60"
               >
-                {(data?.change_border_style_options ?? ["comet", "pulse", "dual"]).map(
+                {(data?.change_border_style_options ?? CHANGE_BORDER_STYLE_LIST).map(
                   (opt) => (
                     <option key={opt} value={opt} className="capitalize">
                       {opt}
