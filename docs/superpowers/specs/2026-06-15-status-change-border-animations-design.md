@@ -144,18 +144,25 @@ Locally we only edit source and update `package-lock.json` (lockfile-only, no
 ## Deployment & Pi verification flow
 
 The Pi is both the verification host and the deploy target (user-authorized for
-this work). Flow:
+this work). The mechanism is the existing **`scripts/test_deploy.sh`**, which
+reads `scripts/.env.test_deploy` (Pi at `csg@10.10.48.167`, repo path
+`/home/csg/StackPI_v2`), rsyncs the **local working tree** to the Pi — excluding
+`node_modules/`, `.next/`, `.git/`, `.venv/`, etc. — then runs `install.sh` +
+`deploy.sh` on the Pi with `SKIP_GIT_PULL=1`. The portal `npm ci && npm run
+build` therefore runs **only on the Pi**; nothing builds locally and no branch
+push is required for verification. Prereqs `sshpass` + `rsync` are present on the
+dev Mac.
 
-1. Implement locally (source edits only) + `npm install gsap --package-lock-only`.
-2. Commit and push the feature branch to `origin`.
-3. On the Pi: check out / pull the feature branch, then run
-   `deploy/deploy.sh` (builds the portal with `npm ci && npm run build`, applies
-   any SQL, restarts services). Run `api/.venv/bin/pytest` for the backend tests.
-4. Verify visually on the kiosk (`/status` + the screen-status settings Test
+Flow:
+
+1. Implement locally (source edits only) + `npm install gsap --package-lock-only`
+   (lockfile-only; no `node_modules`).
+2. `bash scripts/test_deploy.sh` — rsync to the Pi and build/restart there.
+3. Run the backend tests on the Pi (`api/.venv/bin/pytest`).
+4. Verify visually on the kiosk (`/status` + the screen-status settings **Test**
    button) at 10.10.48.167.
-5. Once confirmed, merge the branch to `main` (and the Pi tracks `main` for
-   routine deploys).
+5. Commit the branch; once the operator is happy, merge to `main`.
 
-**Open dependency:** SSH access details for the Pi (login user + repo path on the
-device) are needed to run steps 3–4 remotely. To be confirmed with the operator
-before the Pi steps.
+Note: `test_deploy.sh` → `deploy.sh` is a *full* deploy (restarts api, engine,
+portal, pgweb; reapplies SQL; reinstalls kiosk/plymouth/sudoers assets). That is
+acceptable here and is the project's established test-deploy path.
