@@ -68,7 +68,10 @@ default. **No DB migration is required.**
 ### Layer 2 — Animation component (`portal/src/components/`)
 
 - Add **`gsap`** to `portal/package.json` (bundled by Next.js / npm — no CDN, so
-  the offline kiosk works; loaded once per kiosk session).
+  the offline kiosk works; loaded once per kiosk session). The lockfile is
+  updated locally with `npm install gsap --package-lock-only` (writes
+  `package-lock.json` only — **no `node_modules`**, so the local working tree
+  stays clean) to keep the Pi's `npm ci` reproducible.
 - Replace `ChaseBorder.tsx` with **`ChangeBorder.tsx`**, exporting:
   - `type ChangeBorderStyle = "comet" | "pulse" | "dual"`
   - `CHANGE_BORDER_STYLES` — a registry keyed by style, each entry providing a
@@ -110,16 +113,26 @@ default. **No DB migration is required.**
 - The cycle-count field label adapts: "revolutions" for Comet/Dual, "**pulses**"
   for Pulse. Min/max (1–10) unchanged.
 
-## Testing
+## Testing & verification
 
-- **pytest** (`api/tests/`): `change_border_style` validation in
-  `ScreenStatusRequest` / the POST endpoint — a valid value persists and is
-  returned by the payload; an unknown value returns 400; an omitted field leaves
-  the prior value intact; the payload exposes `_default` and `_options`.
-- **Visual / manual**: the settings-page **Test** button (live preview of each
-  style) and the `/status` kiosk. Animation correctness is inherently visual.
+**No builds run on the local dev machine.** `next build`/`dev` and `npm install`
+generate tens of thousands of files in the working tree, which has caused
+file-count errors locally. All building, the test suite, and visual verification
+happen **on the Pi** (which is the build host the deploy script already targets).
+Locally we only edit source and update `package-lock.json` (lockfile-only, no
+`node_modules`).
+
+- **pytest** (`api/tests/`, run on the Pi via the api `.venv`):
+  `change_border_style` validation in `ScreenStatusRequest` / the POST endpoint —
+  a valid value persists and is returned by the payload; an unknown value returns
+  400; an omitted field leaves the prior value intact; the payload exposes
+  `_default` and `_options`.
+- **Build**: `npm ci && npm run build` for the portal, on the Pi (via
+  `deploy/deploy.sh`). A clean build is the type-check / compile gate.
+- **Visual**: the settings-page **Test** button (live preview of each style) and
+  the `/status` kiosk, observed on the Pi at 10.10.48.167.
 - TDD applies where logic is testable (backend validation; the style-registry
-  duration math). The GSAP rendering is verified by observation.
+  duration math). The GSAP rendering is verified by observation on the Pi.
 
 ## Implementation Constraints
 
@@ -128,7 +141,21 @@ default. **No DB migration is required.**
 - Keep component units small and focused (the style registry + builders are the
   natural seam).
 
-## Deployment
+## Deployment & Pi verification flow
 
-After implementation is verified locally, deploy to the kiosk Pi at
-**10.10.48.167** via the repo's `deploy/deploy.sh` (user-authorized for this work).
+The Pi is both the verification host and the deploy target (user-authorized for
+this work). Flow:
+
+1. Implement locally (source edits only) + `npm install gsap --package-lock-only`.
+2. Commit and push the feature branch to `origin`.
+3. On the Pi: check out / pull the feature branch, then run
+   `deploy/deploy.sh` (builds the portal with `npm ci && npm run build`, applies
+   any SQL, restarts services). Run `api/.venv/bin/pytest` for the backend tests.
+4. Verify visually on the kiosk (`/status` + the screen-status settings Test
+   button) at 10.10.48.167.
+5. Once confirmed, merge the branch to `main` (and the Pi tracks `main` for
+   routine deploys).
+
+**Open dependency:** SSH access details for the Pi (login user + repo path on the
+device) are needed to run steps 3–4 remotely. To be confirmed with the operator
+before the Pi steps.
