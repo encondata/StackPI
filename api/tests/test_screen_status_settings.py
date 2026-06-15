@@ -28,3 +28,12 @@ def test_omitted_style_is_accepted() -> None:
     r = client.post(PATH, json={"change_border_cycle_count": 2})
     assert r.status_code == 200
     assert "change_border_style" in r.json()
+
+
+def test_valid_style_round_trips() -> None:
+    # Posting a valid style persists and is reflected in the payload.
+    r = client.post(PATH, json={"change_border_style": "pulse"})
+    assert r.status_code == 200
+    assert r.json()["change_border_style"] == "pulse"
+    # Restore the default so the test doesn't leave non-default state behind.
+    client.post(PATH, json={"change_border_style": "comet"})
