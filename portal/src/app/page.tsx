@@ -1,0 +1,126 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Image from "next/image";
+import { QRCodeSVG } from "qrcode.react";
+import { KioskHome } from "@/components/KioskHome";
+
+type LocalStatus = {
+  status?: "pre_registered" | "registered" | "revoked" | "unknown";
+  device_uuid?: string | null;
+  name?: string | null;
+  pairing_token?: string | null;
+  pairing_token_expires_at?: string | null;
+  link_url?: string | null;
+};
+
+const POLL_INTERVAL_MS = 5_000;
+
+async function fetchStatus(): Promise<LocalStatus> {
+  const res = await fetch("/local/status", { cache: "no-store" });
+  if (!res.ok) return { status: "unknown" };
+  return (await res.json()) as LocalStatus;
+}
+
+export default function KioskRoot() {
+  const [data, setData] = useState<LocalStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const s = await fetchStatus();
+        if (!cancelled) setData(s);
+      } catch {
+        if (!cancelled) setData((d) => d ?? { status: "unknown" });
+      }
+    }
+    tick();
+    const id = setInterval(tick, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  if (!data) return <LoadingShell />;
+  if (data.status === "registered") return <KioskHome />;
+  if (data.status === "revoked") return <RevokedShell />;
+  if (data.status === "pre_registered" && data.pairing_token) {
+    return <PairingShell data={data} />;
+  }
+  return <LoadingShell />;
+}
+
+function LoadingShell() {
+  return (
+    <main className="flex h-screen w-full overflow-hidden flex-col items-center justify-center gap-4 bg-white p-8">
+      <Image
+        src="/stackpi-logo.png"
+        alt="StackPI"
+        width={1200}
+        height={800}
+        priority
+        className="h-auto w-full max-w-[280px] object-contain opacity-90"
+      />
+      <p className="text-sm text-zinc-500">Loading…</p>
+    </main>
+  );
+}
+
+function RevokedShell() {
+  return (
+    <main className="flex h-screen w-full overflow-hidden flex-col items-center justify-center gap-3 bg-white p-8">
+      <h1 className="text-2xl font-semibold text-red-600">Device de-registered</h1>
+      <p className="text-zinc-600">Re-pairing…</p>
+    </main>
+  );
+}
+
+function PairingShell({ data }: { data: LocalStatus }) {
+  const token = data.pairing_token ?? "";
+  const link = data.link_url ?? "";
+  // link_url is expected to be an absolute URL when STACKPI_LINK_URL_BASE is
+  // configured server-side; if it comes back relative, the QR still encodes
+  // it as-is — fix STACKPI_LINK_URL_BASE on the API rather than papering over.
+  return (
+    <main className="flex h-screen w-full overflow-hidden bg-white">
+      {/* Left half — logo + pairing status, vertically centered */}
+      <div className="flex w-1/2 flex-col items-center justify-center gap-4 p-6">
+        <Image
+          src="/stackpi-logo.png"
+          alt="StackPI"
+          width={1200}
+          height={800}
+          priority
+          className="h-auto w-full max-w-[280px] object-contain"
+        />
+        <p className="text-sm text-zinc-500">Waiting for pairing…</p>
+      </div>
+
+      {/* Right half — QR on top, pairing code below */}
+      <div className="flex w-1/2 flex-col items-center justify-center gap-4 border-l border-zinc-100 p-6">
+        {link && (
+          <div className="rounded-lg border border-zinc-200 bg-white p-3 shadow-sm">
+            <QRCodeSVG value={link} size={150} />
+          </div>
+        )}
+        <p className="text-xs uppercase tracking-widest text-zinc-400">
+          Pairing token
+        </p>
+        <div className="font-mono text-6xl font-bold tracking-[0.15em] text-zinc-900">
+          {token}
+        </div>
+        <p className="text-center text-xs text-zinc-500">
+          Device: <span className="font-medium text-zinc-700">{data.name ?? "?"}</span>
+          {data.pairing_token_expires_at && (
+            <>
+              {" · "}Expires{" "}
+              {new Date(data.pairing_token_expires_at).toLocaleTimeString()}
+            </>
+          )}
+        </p>
+      </div>
+    </main>
+  );
+}
