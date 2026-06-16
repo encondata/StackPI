@@ -16,7 +16,7 @@ import {
 type HomeCardDef = { title: string; Icon: LucideIcon; dimmed?: boolean; href?: string };
 
 const HOME_CARDS: HomeCardDef[] = [
-  { title: "Initial Setup", Icon: Rocket },
+  { title: "Initial Setup", Icon: Rocket, href: "/initial-setup" },
   { title: "Config", Icon: Settings },
   { title: "Internet", Icon: Globe, href: "/internet" },
   { title: "Un-Used", Icon: SquareDashed, dimmed: true },
