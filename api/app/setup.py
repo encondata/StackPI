@@ -34,6 +34,19 @@ def _is_json(resp) -> bool:
     return resp.headers.get("content-type", "").lower().startswith("application/json")
 
 
+def _detail(resp, fallback: str) -> str:
+    """Best-effort `detail` from an error body — never raises (a malformed
+    body with a JSON content-type would otherwise make `.json()` throw)."""
+    if _is_json(resp):
+        try:
+            d = resp.json().get("detail")
+            if isinstance(d, str) and d:
+                return d
+        except ValueError:
+            pass
+    return (resp.text[:200].strip() or fallback) if resp.text else fallback
+
+
 def _basecamp(method: str, path: str, json_body: Optional[dict] = None) -> Any:
     """Call a BaseCampV2 /stackpi endpoint with the device Bearer token.
     Maps auth/transport failures to HTTPException, mirroring portal_sync."""
@@ -53,13 +66,22 @@ def _basecamp(method: str, path: str, json_body: Optional[dict] = None) -> Any:
     if resp.status_code == 401:
         raise HTTPException(status_code=401, detail="BaseCamp token expired")
     if resp.status_code == 404:
-        raise HTTPException(status_code=404, detail=(resp.json().get("detail") if _is_json(resp) else "not found"))
+        raise HTTPException(status_code=404, detail=_detail(resp, "not found"))
     if resp.status_code >= 400:
-        detail = resp.json().get("detail") if _is_json(resp) else resp.text[:200]
-        raise HTTPException(status_code=502, detail=f"BaseCamp error {resp.status_code}: {detail}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"BaseCamp error {resp.status_code}: {_detail(resp, 'upstream error')}",
+        )
+    # Any success (<400). An empty body (e.g. 204) is normalized to {}; a
+    # non-empty body must be JSON or we treat it as an upstream fault.
+    if not resp.content:
+        return {}
     if not _is_json(resp):
         raise HTTPException(status_code=502, detail="BaseCamp returned non-JSON")
-    return resp.json()
+    try:
+        return resp.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail="BaseCamp returned malformed JSON")
 
 
 @router.get("/move-locations")

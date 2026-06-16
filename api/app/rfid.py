@@ -432,8 +432,9 @@ def _extract_hostname(status: Dict[str, Any]) -> Optional[str]:
     # field can be finalized during live verification on the Pi.
     if not isinstance(status, dict):
         return None
-    for key in ("hostName", "hostname", "readerID", "readerId", "deviceId",
-                "name", "serialNumber", "readerName"):
+    # Prefer a human-friendly name over an opaque id/serial.
+    for key in ("hostName", "hostname", "readerName", "name",
+                "readerID", "readerId", "deviceId", "serialNumber"):
         v = status.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
@@ -458,6 +459,7 @@ def probe_reader(body: ReaderProbeRequest) -> Dict[str, Any]:
         token = rfid_status._login(reader)
         status = rfid_status._get_status(reader, token)
     except Exception as e:  # login/status raise RuntimeError on failure
+        log.warning("reader probe failed for %s: %s", reader["address"], e)
         raise HTTPException(status_code=502, detail=f"could not reach reader: {e}")
     hostname = _extract_hostname(status) or reader["address"]
     return {"ok": True, "hostname": hostname, "status": status}
