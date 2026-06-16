@@ -10,8 +10,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-// The four home cards. Placeholders this round — no navigation. "Un-Used"
-// is rendered dimmed. Icons are from lucide-react (already a dependency).
+// The four home cards. "Internet" navigates to /internet; the others are
+// placeholders for now. "Un-Used" is rendered dimmed. Icons are from
+// lucide-react (already a dependency).
 type HomeCardDef = { title: string; Icon: LucideIcon; dimmed?: boolean; href?: string };
 
 const HOME_CARDS: HomeCardDef[] = [
