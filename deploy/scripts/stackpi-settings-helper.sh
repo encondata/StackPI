@@ -31,6 +31,19 @@ valid_hostname() {
   return 0
 }
 
+# Dotted-quad IPv4 check. The API already validates, but this helper runs as
+# root, so it re-validates every value that reaches nmcli (same posture as the
+# prefix check below) — defense in depth, and safe if called by anything else.
+valid_ipv4() {
+  local a="$1" o
+  [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  local IFS=.
+  for o in $a; do
+    [[ "$o" -le 255 ]] || return 1
+  done
+  return 0
+}
+
 # Resolve the wired connection/device dynamically (never hardcode eth0).
 _wired_conn() {
   nmcli -t -f NAME,TYPE connection show \
@@ -255,6 +268,15 @@ case "$cmd" in
     [[ -n "$gw" ]] || fail "missing gateway"
     [[ "$prefix" =~ ^[0-9]+$ ]] || fail "invalid prefix"
     [[ "$prefix" -ge 1 && "$prefix" -le 32 ]] || fail "prefix out of range (1-32)"
+    valid_ipv4 "$ip" || fail "invalid ip"
+    valid_ipv4 "$gw" || fail "invalid gateway"
+    # dns is a comma-separated list (may be empty); every entry must be IPv4.
+    if [[ -n "$dns" ]]; then
+      IFS=',' read -ra _dns <<< "$dns"
+      for _d in "${_dns[@]}"; do
+        valid_ipv4 "$_d" || fail "invalid dns: $_d"
+      done
+    fi
     nmcli connection modify "$conn" ipv4.method manual \
       ipv4.addresses "$ip/$prefix" ipv4.gateway "$gw" ipv4.dns "$dns"
     nmcli connection up "$conn"
