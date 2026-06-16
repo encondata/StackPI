@@ -6,6 +6,7 @@ one path; the helper validates again before calling system tools).
 No auth on these endpoints — the LAN itself is the trust boundary. Same
 posture as the other /local/* endpoints.
 """
+import ipaddress
 import logging
 import os
 import re
@@ -51,6 +52,18 @@ class WifiConnectRequest(BaseModel):
 
 class WifiDisconnectRequest(BaseModel):
     ssid: str = Field(min_length=1, max_length=SSID_MAX)
+
+
+class WiredStaticRequest(BaseModel):
+    ip: str = Field(min_length=1, max_length=45)
+    prefix: int = Field(ge=1, le=32)
+    gateway: str = Field(min_length=1, max_length=45)
+    dns: List[str] = Field(default_factory=list)
+
+
+class WiredConfigRequest(BaseModel):
+    method: str = Field(pattern="^(auto|manual)$")
+    static: Optional[WiredStaticRequest] = None
 
 
 # --- Hardware settings -----------------------------------------------------
@@ -203,6 +216,71 @@ def _get_wan_ip() -> Optional[str]:
         log.warning("WAN IP fetch failed: %s", e)
     # Stale entry is better than nothing.
     return str(cached_ip) if cached_ip else None
+
+
+# Hosts used to confirm real internet reachability (not just a local link).
+_CONNECTIVITY_HOSTS = ("portal.serversherpa.com", "google.com")
+
+
+def _default_gateway() -> Optional[str]:
+    """Parse the default-route gateway from `ip route show default`."""
+    try:
+        proc = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    # Example: "default via 10.10.48.1 dev eth0 proto dhcp ..."
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "default" and parts[1] == "via":
+            return parts[2]
+    return None
+
+
+def _ping(host: str, timeout_s: int = 2) -> bool:
+    """Single ICMP echo. Returns True on reply. ping has cap_net_raw on the
+    Pi, so no privilege/helper needed."""
+    try:
+        proc = subprocess.run(
+            ["ping", "-c", "1", "-W", str(timeout_s), host],
+            capture_output=True, text=True, timeout=timeout_s + 2,
+        )
+        return proc.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _parse_wired(output: str) -> Dict[str, Any]:
+    """Parse key=value lines from the `get-wired` helper output."""
+    data: Dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            data[k.strip()] = v.strip()
+    addresses = data.get("addresses", "")
+    ip, prefix = None, None
+    if "/" in addresses:
+        ip, _, p = addresses.partition("/")
+        ip = ip or None
+        try:
+            prefix = int(p)
+        except ValueError:
+            prefix = None
+    dns_raw = data.get("dns", "")
+    return {
+        "connection": data.get("connection") or None,
+        "device": data.get("device") or None,
+        "carrier": data.get("carrier") == "1",
+        "method": data.get("method") or "auto",
+        "ip": ip,
+        "prefix": prefix,
+        "gateway": data.get("gateway") or None,
+        "dns": [d for d in (s.strip() for s in dns_raw.split(",")) if d],
+    }
 
 
 def _parse_wifi(output: str) -> List[dict]:
@@ -716,3 +794,53 @@ def disconnect_wifi(body: WifiDisconnectRequest) -> dict:
         raise HTTPException(status_code=400, detail="invalid ssid (null byte)")
     out = _run_helper("disconnect-wifi", ssid, timeout=30).strip()
     return {"ok": True, "ssid": ssid, "nmcli_output": out}
+
+
+@router.get("/connectivity")
+def get_connectivity() -> Dict[str, Any]:
+    """Local-link + internet reachability for the kiosk internet flow.
+    gateway_ok = default gateway answers ICMP (we have a usable LAN);
+    internet_ok = at least one external host answers (we have real internet)."""
+    gateway = _default_gateway()
+    gateway_ok = bool(gateway) and _ping(gateway)
+    internet_ok = any(_ping(h) for h in _CONNECTIVITY_HOSTS)
+    return {
+        "gateway": gateway,
+        "gateway_ok": gateway_ok,
+        "internet_ok": internet_ok,
+        "checked": list(_CONNECTIVITY_HOSTS),
+    }
+
+
+@router.get("/wired")
+def get_wired() -> Dict[str, Any]:
+    """Return the current wired (ethernet) connection configuration."""
+    return _parse_wired(_run_helper("get-wired"))
+
+
+@router.post("/wired")
+def set_wired(body: WiredConfigRequest) -> Dict[str, Any]:
+    """Switch the wired connection to DHCP (method=auto) or a static IPv4
+    configuration (method=manual). Returns the resulting wired state."""
+    if body.method == "auto":
+        _run_helper("set-wired-dhcp", timeout=30)
+        return get_wired()
+    # manual
+    s = body.static
+    if s is None:
+        raise HTTPException(status_code=400, detail="static config required when method=manual")
+    # Validate IPs before touching nmcli.
+    try:
+        ipaddress.IPv4Address(s.ip.strip())
+        ipaddress.IPv4Address(s.gateway.strip())
+        for d in s.dns:
+            if d.strip():
+                ipaddress.IPv4Address(d.strip())
+    except ipaddress.AddressValueError as e:
+        raise HTTPException(status_code=400, detail=f"invalid IPv4 address: {e}")
+    dns_csv = ",".join(d.strip() for d in s.dns if d.strip())
+    _run_helper(
+        "set-wired-static", s.ip.strip(), str(s.prefix), s.gateway.strip(), dns_csv,
+        timeout=30,
+    )
+    return get_wired()
