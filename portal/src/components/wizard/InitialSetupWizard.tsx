@@ -6,15 +6,19 @@ import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { StepSelectMove } from "./StepSelectMove";
 import { StepReader } from "./StepReader";
 import { StepSiteScan } from "./StepSiteScan";
+import { StepSummary } from "./StepSummary";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 
 // Shared state threaded through the steps. Step 1 sets move*, Step 2 sets
-// readerName, Step 3 sets siteId/scanTypeId. Finish POSTs reader-settings.
+// readerName, Step 3 sets site*/scanType*, Step 4 commits to the portal.
 export type WizardState = {
   moveId: number | null;
   moveName: string | null;
   readerName: string | null;
   siteId: number | null;
+  siteName: string | null;
   scanTypeId: number | null;
+  scanTypeName: string | null;
 };
 
 export type StepProps = {
@@ -22,7 +26,8 @@ export type StepProps = {
   update: (patch: Partial<WizardState>) => void;
 };
 
-const STEP_TITLES = ["Select Move", "RFID Reader", "Site & Scan Type"];
+const STEP_TITLES = ["Select Move", "RFID Reader", "Site & Scan Type", "Confirm"];
+const LAST_STEP = 4;
 
 export function InitialSetupWizard() {
   const router = useRouter();
@@ -32,10 +37,13 @@ export function InitialSetupWizard() {
     moveName: null,
     readerName: null,
     siteId: null,
+    siteName: null,
     scanTypeId: null,
+    scanTypeName: null,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [committed, setCommitted] = useState(false);
 
   const update = (patch: Partial<WizardState>) =>
     setState((s) => ({ ...s, ...patch }));
@@ -58,10 +66,10 @@ export function InitialSetupWizard() {
 
   function goNext() {
     setError(null);
-    setStep((s) => Math.min(3, s + 1));
+    setStep((s) => Math.min(LAST_STEP, s + 1));
   }
 
-  async function finish() {
+  async function commit() {
     if (!state.readerName || state.siteId == null || state.scanTypeId == null) return;
     setBusy(true);
     setError(null);
@@ -76,7 +84,7 @@ export function InitialSetupWizard() {
         }),
       });
       if (r.ok) {
-        router.push("/");
+        setCommitted(true);
         return;
       }
       const b = (await r.json().catch(() => null)) as { detail?: string } | null;
@@ -94,7 +102,7 @@ export function InitialSetupWizard() {
         <div className="text-xl font-semibold">Initial Setup</div>
         <div className="ml-auto flex items-center gap-2 text-xs text-zinc-400">
           {STEP_TITLES[step - 1]}
-          {[1, 2, 3].map((n) => (
+          {[1, 2, 3, 4].map((n) => (
             <span
               key={n}
               className={
@@ -110,6 +118,9 @@ export function InitialSetupWizard() {
         {step === 1 && <StepSelectMove state={state} update={update} />}
         {step === 2 && <StepReader state={state} update={update} />}
         {step === 3 && <StepSiteScan state={state} update={update} />}
+        {step === 4 && (
+          <StepSummary state={state} committed={committed} commitError={error} />
+        )}
       </section>
 
       {error && <p className="flex-none text-sm text-red-400">{error}</p>}
@@ -123,8 +134,10 @@ export function InitialSetupWizard() {
           <ArrowLeft className="h-4 w-4" /> {step === 1 ? "Home" : "Previous"}
         </button>
         <div className="flex-1" />
-        <span className="text-xs text-zinc-500">Step {step} of 3</span>
-        {step < 3 ? (
+        <span className="text-xs text-zinc-500">
+          Step {step} of {LAST_STEP}
+        </span>
+        {step < LAST_STEP ? (
           <button
             type="button"
             onClick={goNext}
@@ -133,17 +146,31 @@ export function InitialSetupWizard() {
           >
             Next <ArrowRight className="h-4 w-4" />
           </button>
+        ) : committed ? (
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            className="flex h-10 items-center gap-2 rounded-lg bg-green-600 px-5 text-sm font-semibold text-white"
+          >
+            <Check className="h-4 w-4" /> Done
+          </button>
         ) : (
           <button
             type="button"
-            onClick={finish}
-            disabled={!canNext || busy}
+            onClick={commit}
+            disabled={busy}
             className="flex h-10 items-center gap-2 rounded-lg bg-green-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
           >
-            {busy ? "Saving…" : (<><Check className="h-4 w-4" /> Finish</>)}
+            {busy ? "Applying…" : (
+              <>
+                <Check className="h-4 w-4" /> Confirm &amp; Apply
+              </>
+            )}
           </button>
         )}
       </footer>
+
+      <LoadingOverlay show={busy} label="Applying…" />
     </main>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { KioskDropdown, type DropdownOption } from "@/components/KioskDropdown";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 import type { StepProps } from "./InitialSetupWizard";
 
 type Move = {
@@ -17,6 +18,7 @@ export function StepSelectMove({ state, update }: StepProps) {
   const [lastSynced, setLastSynced] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function loadCloud() {
     try {
@@ -38,7 +40,7 @@ export function StepSelectMove({ state, update }: StepProps) {
 
   // Initial load + preselect any existing active move.
   useEffect(() => {
-    loadCloud();
+    loadCloud().finally(() => setLoading(false));
     (async () => {
       try {
         const r = await fetch("/local/active-selection", { cache: "no-store" });
@@ -90,6 +92,10 @@ export function StepSelectMove({ state, update }: StepProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-6">
+      <LoadingOverlay
+        show={loading || syncing}
+        label={syncing ? "Syncing moves…" : "Loading moves…"}
+      />
       <div>
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
           Active Move

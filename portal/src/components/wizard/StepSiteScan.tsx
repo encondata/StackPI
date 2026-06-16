@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { KioskDropdown, type DropdownOption } from "@/components/KioskDropdown";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 import type { StepProps } from "./InitialSetupWizard";
 
 type Site = { id: number; name: string | null };
@@ -67,7 +68,7 @@ export function StepSiteScan({ state, update }: StepProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto">
-      {loading && <p className="text-sm text-zinc-500">Loading from portal…</p>}
+      <LoadingOverlay show={loading} label="Loading move sites & scan types…" />
       {error && <p className="text-sm text-red-400">{error}</p>}
       {!loading && !error && (
         <>
@@ -80,13 +81,13 @@ export function StepSiteScan({ state, update }: StepProps) {
                 role="Source"
                 site={source}
                 selected={source != null && state.siteId === source.id}
-                onClick={() => source && update({ siteId: source.id })}
+                onClick={() => source && update({ siteId: source.id, siteName: source.name ?? null })}
               />
               <SiteCard
                 role="Destination"
                 site={destination}
                 selected={destination != null && state.siteId === destination.id}
-                onClick={() => destination && update({ siteId: destination.id })}
+                onClick={() => destination && update({ siteId: destination.id, siteName: destination.name ?? null })}
               />
             </div>
           </div>
@@ -99,7 +100,10 @@ export function StepSiteScan({ state, update }: StepProps) {
                 value={state.scanTypeId}
                 options={scanOptions}
                 placeholder="Select a scan type…"
-                onChange={(id) => update({ scanTypeId: id })}
+                onChange={(id) => {
+                  const st = scanTypes.find((s) => s.id === id);
+                  update({ scanTypeId: id, scanTypeName: st?.name ?? null });
+                }}
               />
             </div>
           </div>

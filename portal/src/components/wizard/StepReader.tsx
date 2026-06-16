@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { EthernetPort, Plus, RotateCw, Check } from "lucide-react";
 import { OnScreenKeyboard } from "@/components/OnScreenKeyboard";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 import type { StepProps } from "./InitialSetupWizard";
 
 type Reader = {
@@ -58,6 +59,7 @@ export function StepReader({ state, update }: StepProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <LoadingOverlay show={loading} label="Checking readers…" />
       <div className="flex items-center">
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
           Connected readers
