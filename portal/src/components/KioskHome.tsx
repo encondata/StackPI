@@ -74,7 +74,7 @@ export function KioskHome() {
 
   return (
     <main className="flex h-screen w-screen flex-col gap-4 overflow-hidden bg-zinc-950 p-4 text-zinc-100">
-      <section className="grid flex-1 grid-cols-2 grid-rows-2 gap-4">
+      <section className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-4">
         {HOME_CARDS.map((c) => (
           <HomeCard key={c.title} title={c.title} Icon={c.Icon} dimmed={c.dimmed} />
         ))}
