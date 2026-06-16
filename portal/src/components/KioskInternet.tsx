@@ -186,7 +186,7 @@ export function KioskInternet({
   }
 
   return (
-    <main className="flex h-screen w-screen flex-col gap-3 overflow-hidden bg-zinc-950 p-4 text-zinc-100">
+    <main className="relative flex h-screen w-screen flex-col gap-3 overflow-hidden bg-zinc-950 p-4 text-zinc-100">
       <Header mode={mode} />
 
       <section className="flex min-h-0 flex-1 flex-col gap-3">
@@ -565,7 +565,10 @@ function WiredPanel({
         <div className="flex overflow-hidden rounded-md border border-zinc-700">
           <button
             type="button"
-            onClick={() => setMethod("auto")}
+            onClick={() => {
+              setMethod("auto");
+              setError(null);
+            }}
             className={
               "px-4 py-1.5 text-sm font-medium " +
               (method === "auto"
@@ -577,7 +580,10 @@ function WiredPanel({
           </button>
           <button
             type="button"
-            onClick={() => setMethod("manual")}
+            onClick={() => {
+              setMethod("manual");
+              setError(null);
+            }}
             className={
               "px-4 py-1.5 text-sm font-medium " +
               (method === "manual"
