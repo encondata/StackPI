@@ -52,11 +52,18 @@ export function StepSiteScan({ state, update }: StepProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const scanOptions: DropdownOption[] = scanTypes.map((s) => ({
-    id: s.id,
-    label: s.name,
-    color: s.color ?? undefined,
-  }));
+  // Natural sort (RFID 2 before RFID 10), mirroring the portal popup's
+  // localeCompare({numeric:true}) — the cloud endpoint returns plain name order.
+  const scanOptions: DropdownOption[] = scanTypes
+    .slice()
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }),
+    )
+    .map((s) => ({
+      id: s.id,
+      label: s.name,
+      color: s.color ?? undefined,
+    }));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto">
@@ -124,7 +131,7 @@ function SiteCard({
       disabled={!site}
       className={
         "flex-1 rounded-2xl border p-4 text-left " +
-        (selected ? "border-blue-500 bg-blue-950/40 " : "border-zinc-800 bg-zinc-900 ") +
+        (selected ? "border-green-600 bg-green-950/40 " : "border-zinc-800 bg-zinc-900 ") +
         (!site ? "opacity-50" : "")
       }
     >
