@@ -4,6 +4,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.egg-info/
 .mypy_cache/
 .ruff_cache/
 .venv/
@@ -16,3 +17,7 @@ node_modules/
 # Environment files
 .env
 .env.local
+scripts/.env.test_deploy
+
+# Visual brainstorming companion (mockups/state)
+.superpowers/
