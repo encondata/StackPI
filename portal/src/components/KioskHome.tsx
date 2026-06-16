@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Rocket,
   Settings,
@@ -11,12 +12,12 @@ import {
 
 // The four home cards. Placeholders this round — no navigation. "Un-Used"
 // is rendered dimmed. Icons are from lucide-react (already a dependency).
-type HomeCardDef = { title: string; Icon: LucideIcon; dimmed?: boolean };
+type HomeCardDef = { title: string; Icon: LucideIcon; dimmed?: boolean; href?: string };
 
 const HOME_CARDS: HomeCardDef[] = [
   { title: "Initial Setup", Icon: Rocket },
   { title: "Config", Icon: Settings },
-  { title: "Internet", Icon: Globe },
+  { title: "Internet", Icon: Globe, href: "/internet" },
   { title: "Un-Used", Icon: SquareDashed, dimmed: true },
 ];
 
@@ -76,7 +77,13 @@ export function KioskHome() {
     <main className="flex h-screen w-screen flex-col gap-4 overflow-hidden bg-zinc-950 p-4 text-zinc-100">
       <section className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-4">
         {HOME_CARDS.map((c) => (
-          <HomeCard key={c.title} title={c.title} Icon={c.Icon} dimmed={c.dimmed} />
+          <HomeCard
+            key={c.title}
+            title={c.title}
+            Icon={c.Icon}
+            dimmed={c.dimmed}
+            href={c.href}
+          />
         ))}
       </section>
       <HomeStatusBar time={time} dateStr={dateStr} host={host} />
@@ -88,22 +95,30 @@ function HomeCard({
   title,
   Icon,
   dimmed = false,
+  href,
 }: {
   title: string;
   Icon: LucideIcon;
   dimmed?: boolean;
+  href?: string;
 }) {
-  return (
-    <div
-      className={
-        "flex flex-col items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 " +
-        (dimmed ? "opacity-50" : "")
-      }
-    >
+  const cls =
+    "flex flex-col items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 " +
+    (dimmed ? "opacity-50" : "");
+  const inner = (
+    <>
       <Icon className="h-12 w-12 text-zinc-400" strokeWidth={1.6} aria-hidden />
       <p className="text-lg font-semibold tracking-tight text-zinc-100">{title}</p>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link href={href} className={cls}>
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={cls}>{inner}</div>;
 }
 
 function HomeStatusBar({

@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { QRCodeSVG } from "qrcode.react";
 import { KioskHome } from "@/components/KioskHome";
+import { KioskInternet } from "@/components/KioskInternet";
 
 type LocalStatus = {
   status?: "pre_registered" | "registered" | "revoked" | "unknown";
@@ -24,6 +25,12 @@ async function fetchStatus(): Promise<LocalStatus> {
 
 export default function KioskRoot() {
   const [data, setData] = useState<LocalStatus | null>(null);
+  const [internetOk, setInternetOk] = useState<boolean | null>(null);
+
+  const statusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    statusRef.current = data?.status;
+  }, [data]);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,12 +50,41 @@ export default function KioskRoot() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      // Only needed while NOT registered — skip the pings otherwise.
+      const s = statusRef.current;
+      if (s === "registered" || s === "revoked") return;
+      try {
+        const r = await fetch("/local/settings/connectivity", { cache: "no-store" });
+        if (!cancelled && r.ok) {
+          const d = (await r.json()) as { internet_ok?: boolean };
+          if (typeof d.internet_ok === "boolean") setInternetOk(d.internet_ok);
+        }
+      } catch {
+        /* keep last */
+      }
+    }
+    tick();
+    const id = setInterval(tick, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   if (!data) return <LoadingShell />;
   if (data.status === "registered") return <KioskHome />;
   if (data.status === "revoked") return <RevokedShell />;
   if (data.status === "pre_registered" && data.pairing_token) {
     return <PairingShell data={data} />;
   }
+  // Not registered and no pairing code yet. If we've confirmed there's no
+  // internet, the device can't fetch a code — send the operator to the
+  // kiosk Internet page so they can get online; once connectivity + a code
+  // arrive, the status poll above advances to the pairing screen.
+  if (internetOk === false) return <KioskInternet mode="onboarding" />;
   return <LoadingShell />;
 }
 
