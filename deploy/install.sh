@@ -61,6 +61,8 @@ PACKAGES=(
 
   # General utilities
   curl
+  ca-certificates
+  gnupg
   git
   unzip
 )
@@ -88,8 +90,20 @@ fi
 if [[ "$node_major" -ge "$NODE_MAJOR_REQUIRED" ]]; then
   ok "Node.js $(node --version) already satisfies >= ${NODE_MAJOR_REQUIRED}"
 else
-  info "Installing Node.js ${NODE_MAJOR_REQUIRED}.x from NodeSource (found: $(command -v node &>/dev/null && node --version || echo none))"
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR_REQUIRED}.x" | bash -
+  info "Provisioning NodeSource Node ${NODE_MAJOR_REQUIRED}.x apt repo (found: $(command -v node &>/dev/null && node --version || echo none))"
+  # Deterministic, signature-verified install — we do NOT pipe a remote setup
+  # script into a root shell. Instead, fetch the NodeSource signing key into a
+  # dedicated keyring and pin the repo to it via signed-by, so apt itself
+  # cryptographically verifies the nodejs package against that key. The only
+  # network-trust step is the HTTPS key fetch; everything installed afterward
+  # is apt-signature-verified.
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+  chmod 0644 /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR_REQUIRED}.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list
+  apt-get update -y
   apt-get install -y nodejs
   ok "Node.js $(node --version) installed (npm $(npm --version))"
 fi
