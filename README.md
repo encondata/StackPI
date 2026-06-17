@@ -1,12 +1,28 @@
-# StackPI_v2
+# StackPI
 
-StackPI_v2 is a Raspberry Pi 5 deployable full-stack application built around a Python backend, a separate Python worker service, a Next.js admin dashboard, PostgreSQL for persistence, and Nginx as the reverse proxy.
+StackPI is a **Raspberry Pi 5 appliance for tracking datacenter asset movement
+via RFID**. Zebra RFID readers stream tag reads to the Pi; the Pi matches them
+against assets/people synced from a cloud portal (**BaseCampV2**), shows live
+status on attached displays and an interactive touchscreen, raises alerts for
+tags that don't belong to the active move, and reconciles everything with the
+cloud — continuing to work when the network is down.
 
-The project is designed to be developed primarily on macOS and deployed to a Raspberry Pi through a repeatable GitHub pull plus bash deploy workflow. The deployment model favors native Linux services with `systemd` over containers for a simpler, lighter-weight v1 on a single Pi host.
+It runs as native `systemd` services (FastAPI API, a Python cloud agent, a
+Next.js portal, and a RAM-backed PostgreSQL with USB snapshots) and boots
+straight into a `sway` + chromium kiosk.
+
+## Documentation
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — how it's built: components,
+  data flow, the RFID pipeline, cloud sync, the kiosk display model.
+- **[docs/OPERATIONS.md](docs/OPERATIONS.md)** — how to install, set up, use,
+  update, and troubleshoot a device.
 
 ## Setup (fresh Raspberry Pi)
 
-Provision a fresh Pi from scratch with one command. Run it **as the `csg` user** (it uses `sudo` where root is needed), with the USB snapshot drive plugged in at `/dev/sda1`:
+Provision a fresh Pi from scratch with one command. Run it **as the `csg` user**
+(it uses `sudo` where root is needed), with the USB snapshot drive plugged in at
+`/dev/sda1`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/encondata/StackPI/main/deploy/bootstrap.sh | bash
@@ -21,164 +37,57 @@ The [`deploy/bootstrap.sh`](deploy/bootstrap.sh) script:
 5. Runs [`deploy/deploy.sh`](deploy/deploy.sh) — builds API/engine/portal, installs `systemd` units, applies migrations
 6. Runs [`deploy/scripts/setup-kiosk.sh`](deploy/scripts/setup-kiosk.sh) — display-group setup, switches to `multi-user.target`, disables the desktop display manager, and enables the sway kiosk
 
-No manual commands are required. When it finishes it **reboots automatically** (after a 10-second cancellable countdown) for a clean first start of the kiosk display. Pass `SKIP_REBOOT=1` to skip that.
+No manual commands are required. When it finishes it **reboots automatically**
+(after a 10-second cancellable countdown) for a clean first start of the kiosk
+display. Pass `SKIP_REBOOT=1` to skip that.
 
-**Requirements:** the Pi user must be `csg`, and the USB snapshot drive must be present at `/dev/sda1`.
+**Requirements:** the Pi user must be `csg`, and the USB snapshot drive must be
+present at `/dev/sda1`.
 
-**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, `SKIP_DB=1` (skip the database step for a dry run without the USB), `SKIP_KIOSK=1` (skip the display setup), and `SKIP_REBOOT=1` (don't reboot at the end).
+**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, `SKIP_DB=1` (skip the
+database step for a dry run without the USB), `SKIP_KIOSK=1` (skip the display
+setup), and `SKIP_REBOOT=1` (don't reboot at the end).
 
-**Updating an already-provisioned Pi:** re-run the same one-liner (it fast-forwards the checkout), or just `bash ~/StackPI_v2/deploy/deploy.sh`.
+**Updating an already-provisioned Pi:** re-run the same one-liner (it
+fast-forwards the checkout), or just `bash ~/StackPI_v2/deploy/deploy.sh`.
 
-## Recommended Stack
+## What it does
 
-### Backend
+- **RFID ingest + matching** — Zebra readers POST to `/rfid-tags`; reads are
+  matched inline against synced assets/people.
+- **Bad-tag alerts** — a tag that's a known asset but not in the active move
+  triggers an instant sound + full-screen flash (serial + tag) + logged event.
+- **Live displays** — a `/status` dashboard (metrics, RFID activity, system
+  events, RFID traffic light) and a `/trucks` map view, assignable per HDMI
+  output, with a Status↔Truck cycle mode.
+- **Touchscreen UI** — home menu, Initial Setup wizard, network config, and a
+  Config surface (Screens / Audio / Timers / Update), plus a tap-to-start/stop
+  RFID Reader card.
+- **Cloud sync** — pulls moves/assets/people/asset-tags from BaseCampV2 and
+  uploads processed scans; 3-state device status (Registered / Offline /
+  Un-Registered).
+- **Resilient data** — RAM Postgres for speed, USB snapshots for durability.
 
-- FastAPI for inbound and internal APIs
-- Python for the logic engine / worker service
-- Pydantic for request and response validation
-- SQLAlchemy 2.x for database access
-- Alembic for schema migrations
+## Tech stack
 
-### Frontend
+- **API:** FastAPI + Pydantic (Postgres via `psql`/trust-auth, no ORM)
+- **Engine:** Python registration/heartbeat daemon (file-based state)
+- **Portal:** Next.js 16 + React 19 + Tailwind + GSAP
+- **Data:** PostgreSQL 17 (tmpfs cluster, USB `pg_dump` snapshots)
+- **Kiosk:** sway (Wayland) + chromium, multi-output
+- **Ops:** native `systemd` services + timers; provisioned from scripts in `deploy/`
 
-- Next.js with TypeScript
-- App Router
-- Tailwind CSS
-- `shadcn/ui` or a similar component kit for admin UI primitives
-
-### Data and Ops
-
-- PostgreSQL for storage
-- Nginx as the reverse proxy
-- `systemd` for service management on the Raspberry Pi
-- GitHub as the deployment source of truth
-
-## Why This Stack
-
-This system appears orchestration-heavy, integration-heavy, and database-heavy rather than focused on low-level compute performance. That makes Python the better fit for development speed, maintainability, and operational simplicity.
-
-Next.js is the preferred choice for the portal because it builds on React knowledge, supports a mature admin interface ecosystem, and provides a clear path for scaling the dashboard into a full application instead of a thin generated admin surface.
-
-Nginx is used as the reverse proxy to stay consistent with the reverse proxy already in use elsewhere in the operator's infrastructure.
-
-## High-Level Architecture
-
-Run the app as separate services:
-
-- Nginx
-- FastAPI API service
-- Python logic-engine worker
-- PostgreSQL
-- Next.js portal
-
-Request and processing flow:
-
-1. An inbound request reaches FastAPI through Nginx.
-2. FastAPI validates the request and writes state to PostgreSQL.
-3. FastAPI creates work items, status records, or both.
-4. The Python worker processes long-running business logic.
-5. The dashboard reads state through API endpoints backed by PostgreSQL.
-
-This separation keeps long-running or failure-prone work out of request handlers and makes scaling, debugging, and restart behavior easier to reason about.
-
-## Repository Layout
-
-Suggested repo structure:
+## Repository layout
 
 ```text
-project-root/
-  api/
-    app/
-    tests/
-  engine/
-    app/
-    tests/
-  portal/
-    src/
-    public/
-  db/
-    migrations/
-  deploy/
-    bootstrap-pi.sh
-    deploy.sh
-    services/
-      app-api.service
-      app-engine.service
-      app-portal.service
-    nginx/
-      stackpi.conf
-  scripts/
-  docs/
-    project-spec.md
-  .env.example
-  README.md
+api/      FastAPI app + tests        — device-local HTTP API
+engine/   cloud registration/heartbeat agent
+portal/   Next.js portal (kiosk pages + admin /config)
+db/sql/   idempotent SQL migrations
+deploy/   bootstrap/install/deploy scripts, systemd units, sway, plymouth, assets
+scripts/  local dev + test-deploy helpers
+docs/     architecture + operations documentation
 ```
 
-Folder responsibilities:
-
-- `api/`: FastAPI routes, schemas, auth, API models, and HTTP-facing logic
-- `engine/`: business rules, queue or job processing, and scheduled/background tasks
-- `portal/`: Next.js admin dashboard
-- `db/`: Alembic migrations and database setup artifacts
-- `deploy/`: Raspberry Pi bootstrap scripts, deploy scripts, Nginx config, and `systemd` units
-- `scripts/`: local utility scripts for development and operations
-- `docs/`: project planning and architecture documentation
-
-## Deployment Model
-
-The initial target is a single Raspberry Pi host running native Linux services:
-
-- Nginx as a system service
-- PostgreSQL as a system service
-- FastAPI as a `systemd` unit
-- Python worker as a `systemd` unit
-- Next.js as a `systemd` unit
-
-This keeps v1 simple to inspect and debug. The long-term deployment path should still be scriptable and reproducible from a fresh Pi.
-
-## Development Workflow
-
-- Build and iterate primarily on macOS
-- Use the Pi as the real deployment and integration target
-- Push changes to GitHub
-- Pull changes onto the Pi
-- Run a repeatable deploy script
-
-Avoid manually building the full system on the Pi first and trying to automate later. A scripted deployment path should exist from the beginning.
-
-## First Implementation Milestones
-
-Recommended build order:
-
-1. Scaffold the repo structure
-2. Stand up a FastAPI health endpoint
-3. Stand up PostgreSQL connectivity and migrations
-4. Create the worker skeleton
-5. Create the Next.js admin shell
-6. Wire Nginx routes
-7. Add `systemd` unit files
-8. Write `bootstrap-pi.sh`
-9. Write `deploy.sh`
-
-## Project Brief
-
-Build a Raspberry Pi 5 deployable full-stack application using FastAPI for the API, a separate Python worker service for the logic engine, Next.js with TypeScript for the admin dashboard, PostgreSQL for persistence, and Nginx as the reverse proxy. Develop primarily on macOS, deploy to the Pi via GitHub pull plus bash deploy scripts, use `systemd` for service management, keep the project in its own repo, and structure the codebase so a fresh Pi can be bootstrapped entirely from scripts.
-
-## Next Step
-
-The next practical step is to scaffold the repository layout and add the first working slice:
-
-- FastAPI health check
-- database wiring
-- worker process skeleton
-- Next.js admin shell
-- deployment placeholders for Nginx and `systemd`
-
-## Current Status
-
-The first backend slice is now defined in `api/`:
-
-- FastAPI project metadata in [api/pyproject.toml](/Users/jrh1812/Desktop/StackPI_v2/api/pyproject.toml)
-- app entrypoint in [api/app/main.py](/Users/jrh1812/Desktop/StackPI_v2/api/app/main.py)
-- settings in [api/app/config.py](/Users/jrh1812/Desktop/StackPI_v2/api/app/config.py)
-- smoke test in [api/tests/test_health.py](/Users/jrh1812/Desktop/StackPI_v2/api/tests/test_health.py)
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full component map and
+[docs/OPERATIONS.md](docs/OPERATIONS.md) for day-to-day operation.
