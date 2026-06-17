@@ -36,9 +36,8 @@ PACKAGES=(
   python3-venv
   python3-pip
 
-  # Node / npm  (for the portal)
-  nodejs
-  npm
+  # Node / npm for the portal are installed separately below (NodeSource
+  # Node 20 LTS) — Raspberry Pi OS's apt nodejs (18) is too old for Next.js 16.
 
   # PostgreSQL
   postgresql
@@ -69,6 +68,31 @@ PACKAGES=(
 info "Installing system packages"
 apt-get install -y "${PACKAGES[@]}"
 ok "System packages installed"
+
+###############################################################################
+# Node.js 20 LTS  (for the portal — Next.js 16 needs Node >= 20.9)
+###############################################################################
+#
+# Raspberry Pi OS / Debian Bookworm ships Node 18 in apt, which is too old to
+# build the portal. Install Node 20 LTS from NodeSource (which bundles npm).
+# Idempotent: skip if a new-enough node is already present.
+
+info "Ensuring Node.js 20 LTS"
+
+NODE_MAJOR_REQUIRED=20
+node_major=0
+if command -v node &>/dev/null; then
+  node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+fi
+
+if [[ "$node_major" -ge "$NODE_MAJOR_REQUIRED" ]]; then
+  ok "Node.js $(node --version) already satisfies >= ${NODE_MAJOR_REQUIRED}"
+else
+  info "Installing Node.js ${NODE_MAJOR_REQUIRED}.x from NodeSource (found: $(command -v node &>/dev/null && node --version || echo none))"
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR_REQUIRED}.x" | bash -
+  apt-get install -y nodejs
+  ok "Node.js $(node --version) installed (npm $(npm --version))"
+fi
 
 ###############################################################################
 # pgweb  (lightweight PostgreSQL web UI)
