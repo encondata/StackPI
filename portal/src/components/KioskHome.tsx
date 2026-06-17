@@ -24,7 +24,7 @@ const HOME_CARDS: HomeCardDef[] = [
 
 // Shown on / when the device is registered. 800×480 touchscreen home:
 // a centered 2×2 card grid over a bottom status bar mirroring /status.
-export function KioskHome() {
+export function KioskHome({ offline = false }: { offline?: boolean }) {
   const [time, setTime] = useState<string>("");
   const [dateStr, setDateStr] = useState<string>("");
   const [host, setHost] = useState<string>("…");
@@ -87,7 +87,7 @@ export function KioskHome() {
           />
         ))}
       </section>
-      <HomeStatusBar time={time} dateStr={dateStr} host={host} />
+      <HomeStatusBar time={time} dateStr={dateStr} host={host} offline={offline} />
     </main>
   );
 }
@@ -126,10 +126,12 @@ function HomeStatusBar({
   time,
   dateStr,
   host,
+  offline = false,
 }: {
   time: string;
   dateStr: string;
   host: string;
+  offline?: boolean;
 }) {
   return (
     <div className="flex h-[60px] shrink-0 items-center gap-6 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 px-5 font-mono">
@@ -143,8 +145,13 @@ function HomeStatusBar({
         <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-zinc-500">
           Portal
         </p>
-        <p className="text-lg font-medium leading-tight text-green-400">
-          Registered
+        <p
+          className={
+            "text-lg font-medium leading-tight " +
+            (offline ? "text-amber-400" : "text-green-400")
+          }
+        >
+          {offline ? "Offline" : "Registered"}
         </p>
       </div>
     </div>

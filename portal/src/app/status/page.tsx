@@ -280,13 +280,16 @@ function formatScanTime(iso: string | null): string {
   }
 }
 
-type RegStatus = "pre_registered" | "registered" | "revoked" | "unknown";
+// Operator-facing registration display is driven by the API's
+// `display_status` (registered | offline | unregistered). "unknown" is a
+// local fallback used before the first poll resolves / on fetch failure.
+type RegStatus = "registered" | "offline" | "unregistered" | "unknown";
 
 const REG_DISPLAY: Record<RegStatus, { label: string; tone: string }> = {
-  registered:     { label: "Registered",     tone: "text-green-400" },
-  pre_registered: { label: "Pre-registered", tone: "text-yellow-400" },
-  revoked:        { label: "Revoked",        tone: "text-red-400" },
-  unknown:        { label: "Unknown",        tone: "text-zinc-400" },
+  registered:   { label: "Registered",    tone: "text-green-400" },
+  offline:      { label: "Offline",       tone: "text-amber-400" },
+  unregistered: { label: "Un-Registered", tone: "text-zinc-400" },
+  unknown:      { label: "Unknown",       tone: "text-zinc-400" },
 };
 
 function formatUptime(s: number | null | undefined): string {
@@ -430,15 +433,23 @@ export default function StatusPage() {
       try {
         const r = await fetch("/local/status", { cache: "no-store" });
         if (!cancelled && r.ok) {
-          const d = (await r.json()) as { status?: string };
-          const s = d?.status;
-          setReg(
-            s === "registered" ||
-              s === "pre_registered" ||
-              s === "revoked"
-              ? (s as RegStatus)
-              : "unknown"
-          );
+          const d = (await r.json()) as {
+            status?: string;
+            display_status?: string;
+          };
+          const ds = d?.display_status;
+          if (
+            ds === "registered" ||
+            ds === "offline" ||
+            ds === "unregistered"
+          ) {
+            setReg(ds);
+          } else {
+            // Fall back to deriving from `status` if `display_status` is
+            // absent: registered → "registered", everything else (revoked /
+            // pre_registered / unknown) → "unregistered".
+            setReg(d?.status === "registered" ? "registered" : "unregistered");
+          }
         }
       } catch {
         /* keep last value */

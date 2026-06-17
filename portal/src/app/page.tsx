@@ -13,6 +13,7 @@ type LocalStatus = {
   pairing_token?: string | null;
   pairing_token_expires_at?: string | null;
   link_url?: string | null;
+  connectivity?: string;
 };
 
 const POLL_INTERVAL_MS = 5_000;
@@ -75,7 +76,8 @@ export default function KioskRoot() {
   }, []);
 
   if (!data) return <LoadingShell />;
-  if (data.status === "registered") return <KioskHome />;
+  if (data.status === "registered")
+    return <KioskHome offline={data.connectivity === "offline"} />;
   if (data.status === "revoked") return <RevokedShell />;
   if (data.status === "pre_registered" && data.pairing_token) {
     return <PairingShell data={data} />;
