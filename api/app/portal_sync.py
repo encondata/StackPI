@@ -365,12 +365,21 @@ def sync_now() -> Dict[str, Any]:
         em_body = _fetch_endpoint(SYNC_ENDPOINT_EVENTS_MOVES)
         pp_body = _fetch_endpoint(SYNC_ENDPOINT_PEOPLE)
         ma_body = _fetch_endpoint(SYNC_ENDPOINT_MOVES_ASSETS)
-        at_body = _fetch_endpoint(SYNC_ENDPOINT_ASSET_TAGS)
     except RuntimeError as e:
         msg = str(e)
         _record_error(msg)
         system_events.emit("sync", system_events.KIND_ERROR, "Sync Error", msg)
         return {"ok": False, "error": msg}
+
+    # asset-tags is a newer endpoint. Fetch it separately and TOLERATE
+    # failure (e.g. a BaseCamp that hasn't deployed it yet) so it can never
+    # regress the core moves/people/assets sync — we just sync an empty
+    # alert list (no flags) until it's available.
+    try:
+        at_body = _fetch_endpoint(SYNC_ENDPOINT_ASSET_TAGS)
+    except RuntimeError as e:
+        log.warning("asset-tags fetch failed (continuing without): %s", e)
+        at_body = {}
 
     moves        = em_body.get("moves")        or []
     events       = em_body.get("events")       or []
