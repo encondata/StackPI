@@ -4,6 +4,34 @@ StackPI_v2 is a Raspberry Pi 5 deployable full-stack application built around a 
 
 The project is designed to be developed primarily on macOS and deployed to a Raspberry Pi through a repeatable GitHub pull plus bash deploy workflow. The deployment model favors native Linux services with `systemd` over containers for a simpler, lighter-weight v1 on a single Pi host.
 
+## Setup (fresh Raspberry Pi)
+
+Provision a fresh Pi from scratch with one command. Run it **as the `csg` user** (it uses `sudo` where root is needed), with the USB snapshot drive plugged in at `/dev/sda1`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/encondata/StackPI/main/deploy/bootstrap.sh | bash
+```
+
+The [`deploy/bootstrap.sh`](deploy/bootstrap.sh) script:
+
+1. Installs `git`
+2. Clones the repo into `/home/csg/StackPI_v2`
+3. Runs [`deploy/install.sh`](deploy/install.sh) — system packages + Node 20 (NodeSource) + pgweb
+4. Runs [`deploy/scripts/setup-pg-memcluster.sh`](deploy/scripts/setup-pg-memcluster.sh) — RAM Postgres cluster + USB snapshots
+5. Runs [`deploy/deploy.sh`](deploy/deploy.sh) — builds API/engine/portal, installs `systemd` units, applies migrations
+
+**Requirements:** the Pi user must be `csg`, and the USB snapshot drive must be present at `/dev/sda1`.
+
+**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, and `SKIP_DB=1` (skip the database step for a dry run without the USB).
+
+**One manual follow-up** — enable the kiosk display session once the Pi is at `multi-user.target` with the display manager disabled:
+
+```bash
+sudo systemctl enable --now stackpi-kiosk
+```
+
+**Updating an already-provisioned Pi:** re-run the same one-liner (it fast-forwards the checkout), or just `bash ~/StackPI_v2/deploy/deploy.sh`.
+
 ## Recommended Stack
 
 ### Backend
