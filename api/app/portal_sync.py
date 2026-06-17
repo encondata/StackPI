@@ -49,6 +49,7 @@ DEFAULT_API_BASE = "https://api.serversherpa.com"
 SYNC_ENDPOINT_EVENTS_MOVES = "/stackpi/sync/active-events-moves"
 SYNC_ENDPOINT_PEOPLE       = "/stackpi/sync/people"
 SYNC_ENDPOINT_MOVES_ASSETS = "/stackpi/sync/active-moves-assets"
+SYNC_ENDPOINT_ASSET_TAGS   = "/stackpi/sync/asset-tags"
 
 DB_NAME = "stackpi"
 DB_USER = "csg"
@@ -224,6 +225,7 @@ _MOVES_ASSETS_COLUMNS = (
     "id", "moves_id", "asset_id", "asset_serial_number", "priority_wave",
     "asset_name", "asset_rfid_tag", "asset_make", "asset_model",
 )
+_ASSET_TAGS_COLUMNS = ("id_hex", "serial", "name")
 
 
 def _sql_literal(v: Any) -> str:
@@ -272,6 +274,7 @@ def _persist_payload(
     events: List[Dict[str, Any]],
     people: List[Dict[str, Any]],
     moves_assets: List[Dict[str, Any]],
+    asset_tags: List[Dict[str, Any]],
     fetched_at: str,
 ) -> None:
     """TRUNCATE + bulk-INSERT all sync targets in a single transaction.
@@ -282,6 +285,7 @@ def _persist_payload(
     events_insert       = _build_insert("cloud_sync_events",       _EVENTS_COLUMNS,       events)
     people_insert       = _build_insert("cloud_sync_people",       _PEOPLE_COLUMNS,       people)
     moves_assets_insert = _build_insert("cloud_sync_moves_assets", _MOVES_ASSETS_COLUMNS, moves_assets)
+    asset_tags_insert   = _build_insert("local_asset_tags",        _ASSET_TAGS_COLUMNS,   asset_tags)
 
     script_parts = [
         "BEGIN;",
@@ -289,8 +293,10 @@ def _persist_payload(
         "TRUNCATE TABLE cloud_sync_events;",
         "TRUNCATE TABLE cloud_sync_people;",
         "TRUNCATE TABLE cloud_sync_moves_assets;",
+        "TRUNCATE TABLE local_asset_tags;",
     ]
     if moves_insert:        script_parts.append(moves_insert)
+    if asset_tags_insert:   script_parts.append(asset_tags_insert)
     if events_insert:       script_parts.append(events_insert)
     if people_insert:       script_parts.append(people_insert)
     if moves_assets_insert: script_parts.append(moves_assets_insert)
@@ -359,6 +365,7 @@ def sync_now() -> Dict[str, Any]:
         em_body = _fetch_endpoint(SYNC_ENDPOINT_EVENTS_MOVES)
         pp_body = _fetch_endpoint(SYNC_ENDPOINT_PEOPLE)
         ma_body = _fetch_endpoint(SYNC_ENDPOINT_MOVES_ASSETS)
+        at_body = _fetch_endpoint(SYNC_ENDPOINT_ASSET_TAGS)
     except RuntimeError as e:
         msg = str(e)
         _record_error(msg)
@@ -369,6 +376,7 @@ def sync_now() -> Dict[str, Any]:
     events       = em_body.get("events")       or []
     people       = pp_body.get("people")       or []
     moves_assets = ma_body.get("moves_assets") or []
+    asset_tags   = at_body.get("tags")         or []
     # Use whichever fetched_at the server emitted last — only used as a
     # debugging hint stored in cloud_sync_meta.
     fetched_at = (
@@ -379,7 +387,7 @@ def sync_now() -> Dict[str, Any]:
     )
 
     try:
-        _persist_payload(moves, events, people, moves_assets, fetched_at)
+        _persist_payload(moves, events, people, moves_assets, asset_tags, fetched_at)
     except RuntimeError as e:
         msg = str(e)
         _record_error(msg)
@@ -391,7 +399,8 @@ def sync_now() -> Dict[str, Any]:
         system_events.KIND_SUCCESS,
         "Sync Success",
         f"{len(moves)} move(s), {len(events)} event(s), "
-        f"{len(people)} person/people, {len(moves_assets)} asset(s)",
+        f"{len(people)} person/people, {len(moves_assets)} asset(s), "
+        f"{len(asset_tags)} asset tag(s)",
     )
     return {
         "ok": True,
@@ -399,6 +408,7 @@ def sync_now() -> Dict[str, Any]:
         "events_count":       len(events),
         "people_count":       len(people),
         "moves_assets_count": len(moves_assets),
+        "asset_tags_count":   len(asset_tags),
         "fetched_at":         fetched_at,
     }
 
