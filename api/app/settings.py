@@ -679,6 +679,35 @@ def set_screen_status_settings(body: ScreenStatusRequest) -> Dict[str, Any]:
     return _get_screen_status_payload()
 
 
+@router.get("/device-status")
+def get_device_status_settings() -> Dict[str, Any]:
+    """The status-check interval (used by the engine heartbeat loop + as the
+    /local/status freshness window). Operator-configurable on /config."""
+    from app.cloud_status import (  # noqa: PLC0415
+        KEY_STATUS_INTERVAL, STATUS_INTERVAL_DEFAULT, STATUS_INTERVAL_MIN, STATUS_INTERVAL_MAX,
+    )
+    return {
+        "interval_seconds": _get_setting_int(
+            KEY_STATUS_INTERVAL, STATUS_INTERVAL_DEFAULT, STATUS_INTERVAL_MIN, STATUS_INTERVAL_MAX
+        ),
+        "interval_seconds_default": STATUS_INTERVAL_DEFAULT,
+        "interval_seconds_min": STATUS_INTERVAL_MIN,
+        "interval_seconds_max": STATUS_INTERVAL_MAX,
+    }
+
+
+class DeviceStatusRequest(BaseModel):
+    interval_seconds: int = Field(ge=10, le=300)
+
+
+@router.post("/device-status")
+def set_device_status_settings(body: DeviceStatusRequest) -> Dict[str, Any]:
+    from app.cloud_status import KEY_STATUS_INTERVAL  # noqa: PLC0415
+    if not _persist_setting(KEY_STATUS_INTERVAL, str(int(body.interval_seconds))):
+        raise HTTPException(status_code=500, detail="failed to persist interval_seconds")
+    return get_device_status_settings()
+
+
 @router.post("/hardware")
 def set_hardware(body: HardwareRequest) -> Dict[str, str]:
     updates = {

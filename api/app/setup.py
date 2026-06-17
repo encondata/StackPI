@@ -72,8 +72,12 @@ def _basecamp(method: str, path: str, json_body: Optional[dict] = None) -> Any:
             status_code=502,
             detail=f"BaseCamp error {resp.status_code}: {_detail(resp, 'upstream error')}",
         )
-    # Any success (<400). An empty body (e.g. 204) is normalized to {}; a
-    # non-empty body must be JSON or we treat it as an upstream fault.
+    # Any success (<400). Record a successful cloud contact for /local/status
+    # connectivity. Best-effort — never break the proxy path.
+    from app.cloud_status import record_cloud_ok  # noqa: PLC0415
+    record_cloud_ok()
+    # An empty body (e.g. 204) is normalized to {}; a non-empty body must be
+    # JSON or we treat it as an upstream fault.
     if not resp.content:
         return {}
     if not _is_json(resp):
