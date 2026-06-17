@@ -57,8 +57,8 @@ export function StepSummary({
         {committed
           ? "Settings applied to the portal."
           : commitError
-            ? `Apply failed — ${commitError}`
-            : "Review your choices, then tap Confirm & Apply to write them to the portal."}
+            ? `Apply failed — ${commitError}. Tap Retry to try again.`
+            : "Applying…"}
       </p>
     </div>
   );

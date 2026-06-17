@@ -69,8 +69,8 @@ export function InitialSetupWizard() {
     setStep((s) => Math.min(LAST_STEP, s + 1));
   }
 
-  async function commit() {
-    if (!state.readerName || state.siteId == null || state.scanTypeId == null) return;
+  async function runCommit(): Promise<boolean> {
+    if (!state.readerName || state.siteId == null || state.scanTypeId == null) return false;
     setBusy(true);
     setError(null);
     try {
@@ -85,15 +85,29 @@ export function InitialSetupWizard() {
       });
       if (r.ok) {
         setCommitted(true);
-        return;
+        return true;
       }
       const b = (await r.json().catch(() => null)) as { detail?: string } | null;
       setError(b?.detail ?? "Failed to save reader settings.");
+      return false;
     } catch {
       setError("Failed to save reader settings.");
+      return false;
     } finally {
       setBusy(false);
     }
+  }
+
+  // Step 3 "Next" commits to the portal, then advances to the Step 4 summary
+  // regardless of the result so the operator sees the status (green/red).
+  // Other steps just advance.
+  async function goNextOrCommit() {
+    if (step === 3) {
+      await runCommit();
+      setStep(LAST_STEP);
+      return;
+    }
+    goNext();
   }
 
   return (
@@ -140,11 +154,17 @@ export function InitialSetupWizard() {
         {step < LAST_STEP ? (
           <button
             type="button"
-            onClick={goNext}
-            disabled={!canNext}
+            onClick={goNextOrCommit}
+            disabled={!canNext || busy}
             className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
           >
-            Next <ArrowRight className="h-4 w-4" />
+            {step === 3 && busy ? (
+              "Applying…"
+            ) : (
+              <>
+                Next <ArrowRight className="h-4 w-4" />
+              </>
+            )}
           </button>
         ) : committed ? (
           <button
@@ -157,15 +177,11 @@ export function InitialSetupWizard() {
         ) : (
           <button
             type="button"
-            onClick={commit}
+            onClick={runCommit}
             disabled={busy}
-            className="flex h-10 items-center gap-2 rounded-lg bg-green-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
+            className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
           >
-            {busy ? "Applying…" : (
-              <>
-                <Check className="h-4 w-4" /> Confirm &amp; Apply
-              </>
-            )}
+            {busy ? "Retrying…" : "Retry"}
           </button>
         )}
       </footer>
