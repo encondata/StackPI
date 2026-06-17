@@ -24,10 +24,14 @@ PGCTL_LOG=/var/lib/postgresql/stackpi-bootstrap.log
 
 log() { printf '[stackpi-pg-bootstrap] %s\n' "$1"; }
 
-# Ensure the tmpfs directory exists and is owned by postgres. The fstab
-# mount option sets this on mount, but be defensive in case of an override.
+# Ensure the tmpfs data dir exists and is owned by postgres. The fstab mount
+# option sets this on mount, but be defensive in case of an override. tmpfs
+# supports chown/chmod, so install -d is fine here.
 install -d -o postgres -g postgres -m 0700 "$DATA"
-install -d -o postgres -g postgres -m 0700 "$SNAP_DIR"
+# The USB snapshot dir is a vfat mount — ownership and permissions are fixed by
+# the fstab uid/gid/umask at mount time and CANNOT be changed with chown/chmod
+# (that errors "Operation not permitted" on vfat). Just ensure it exists.
+mkdir -p "$SNAP_DIR"
 
 # Pre-create the pg_ctl log file with postgres ownership so pg_ctl (running
 # as postgres) can open it for write. /var/lib/postgresql is postgres's home,
