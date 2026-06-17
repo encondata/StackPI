@@ -21,15 +21,11 @@ The [`deploy/bootstrap.sh`](deploy/bootstrap.sh) script:
 5. Runs [`deploy/deploy.sh`](deploy/deploy.sh) — builds API/engine/portal, installs `systemd` units, applies migrations
 6. Runs [`deploy/scripts/setup-kiosk.sh`](deploy/scripts/setup-kiosk.sh) — display-group setup, switches to `multi-user.target`, disables the desktop display manager, and enables the sway kiosk
 
-No manual commands are required. When it finishes, reboot for the cleanest first start of the kiosk display:
-
-```bash
-sudo reboot
-```
+No manual commands are required. When it finishes it **reboots automatically** (after a 10-second cancellable countdown) for a clean first start of the kiosk display. Pass `SKIP_REBOOT=1` to skip that.
 
 **Requirements:** the Pi user must be `csg`, and the USB snapshot drive must be present at `/dev/sda1`.
 
-**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, `SKIP_DB=1` (skip the database step for a dry run without the USB), and `SKIP_KIOSK=1` (skip the display setup).
+**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, `SKIP_DB=1` (skip the database step for a dry run without the USB), `SKIP_KIOSK=1` (skip the display setup), and `SKIP_REBOOT=1` (don't reboot at the end).
 
 **Updating an already-provisioned Pi:** re-run the same one-liner (it fast-forwards the checkout), or just `bash ~/StackPI_v2/deploy/deploy.sh`.
 

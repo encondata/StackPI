@@ -94,10 +94,19 @@ fi
 # --- done ------------------------------------------------------------------
 info "Bootstrap complete"
 ok "StackPI is installed at $TARGET_DIR"
-cat <<EOF
 
-All set. A reboot gives the cleanest first start of the kiosk display:
+# Reboot for the cleanest first start of the kiosk display. Opt out with
+# SKIP_REBOOT=1. A short countdown lets an interactive operator cancel.
+if [[ "${SKIP_REBOOT:-0}" == "1" ]]; then
+  cat <<EOF
 
+SKIP_REBOOT=1 — not rebooting. Reboot when ready for the cleanest kiosk start:
   sudo reboot
-
 EOF
+else
+  # Refresh the sudo timestamp so the reboot doesn't prompt after a long build.
+  sudo -v || true
+  warn "Rebooting in 10s for a clean kiosk start — press Ctrl-C to cancel."
+  sleep 10
+  sudo reboot
+fi
