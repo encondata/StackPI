@@ -4,11 +4,9 @@ After=stackpi-portal.service systemd-user-sessions.service
 Wants=stackpi-portal.service
 Conflicts=getty@tty1.service
 
-# Manual one-time Pi prep (not automated yet):
-#   - User csg must be in groups: video, input, render, tty
-#       sudo usermod -a -G video,input,render,tty csg
-#   - Disable any autologin / lightdm so this unit owns tty1
-#   - XDG_RUNTIME_DIR below assumes csg is uid 1000
+# Kiosk prep (groups, multi-user.target, disabling the display manager, and
+# enabling this unit) is automated by deploy/scripts/setup-kiosk.sh, which the
+# bootstrap runs. XDG_RUNTIME_DIR below assumes csg is uid 1000.
 
 [Service]
 Type=simple

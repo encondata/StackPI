@@ -82,15 +82,22 @@ fi
 info "Running deploy.sh (build api/engine/portal, install services, migrations)"
 SKIP_GIT_PULL=1 bash "$TARGET_DIR/deploy/deploy.sh"
 
+# --- 6. kiosk display ------------------------------------------------------
+if [[ "${SKIP_KIOSK:-0}" == "1" ]]; then
+  warn "SKIP_KIOSK=1 — not enabling the kiosk display. Enable later with:"
+  warn "  sudo bash $TARGET_DIR/deploy/scripts/setup-kiosk.sh"
+else
+  info "Setting up the kiosk display (groups, multi-user target, disable desktop, enable sway)"
+  sudo KIOSK_USER="$RUN_USER" bash "$TARGET_DIR/deploy/scripts/setup-kiosk.sh"
+fi
+
 # --- done ------------------------------------------------------------------
 info "Bootstrap complete"
 ok "StackPI is installed at $TARGET_DIR"
 cat <<EOF
 
-Next step (one-time, not done automatically): enable the kiosk display session.
-It needs the Pi booted to multi-user.target with the display manager disabled.
-Once that's prepared:
+All set. A reboot gives the cleanest first start of the kiosk display:
 
-  sudo systemctl enable --now stackpi-kiosk
+  sudo reboot
 
 EOF

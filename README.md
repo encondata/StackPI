@@ -19,16 +19,17 @@ The [`deploy/bootstrap.sh`](deploy/bootstrap.sh) script:
 3. Runs [`deploy/install.sh`](deploy/install.sh) — system packages + Node 20 (NodeSource) + pgweb
 4. Runs [`deploy/scripts/setup-pg-memcluster.sh`](deploy/scripts/setup-pg-memcluster.sh) — RAM Postgres cluster + USB snapshots
 5. Runs [`deploy/deploy.sh`](deploy/deploy.sh) — builds API/engine/portal, installs `systemd` units, applies migrations
+6. Runs [`deploy/scripts/setup-kiosk.sh`](deploy/scripts/setup-kiosk.sh) — display-group setup, switches to `multi-user.target`, disables the desktop display manager, and enables the sway kiosk
+
+No manual commands are required. When it finishes, reboot for the cleanest first start of the kiosk display:
+
+```bash
+sudo reboot
+```
 
 **Requirements:** the Pi user must be `csg`, and the USB snapshot drive must be present at `/dev/sda1`.
 
-**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, and `SKIP_DB=1` (skip the database step for a dry run without the USB).
-
-**One manual follow-up** — enable the kiosk display session once the Pi is at `multi-user.target` with the display manager disabled:
-
-```bash
-sudo systemctl enable --now stackpi-kiosk
-```
+**Options (env vars):** `REPO_URL`, `BRANCH`, `TARGET_DIR`, `SKIP_DB=1` (skip the database step for a dry run without the USB), and `SKIP_KIOSK=1` (skip the display setup).
 
 **Updating an already-provisioned Pi:** re-run the same one-liner (it fast-forwards the checkout), or just `bash ~/StackPI_v2/deploy/deploy.sh`.
 
