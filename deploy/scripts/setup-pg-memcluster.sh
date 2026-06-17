@@ -27,8 +27,14 @@ ok "Debian postgresql stopped + disabled"
 
 info "Preparing mount points"
 mkdir -p "$TMPFS_DIR" "$USB_MOUNT"
-chown postgres:postgres "$TMPFS_DIR" "$USB_MOUNT"
-chmod 0700 "$TMPFS_DIR" "$USB_MOUNT"
+# tmpfs supports ownership — set it on the data dir (the fstab opts also set it
+# on mount). Safe to re-run: chown/chmod on a mounted tmpfs succeeds.
+chown postgres:postgres "$TMPFS_DIR"
+chmod 0700 "$TMPFS_DIR"
+# Do NOT chown/chmod "$USB_MOUNT": it's a vfat mount whose ownership/permissions
+# are fixed by the fstab uid/gid/umask at mount time. chown/chmod errors
+# "Operation not permitted" on vfat (and would break a re-run, where the USB is
+# already mounted). The bare mountpoint's ownership is irrelevant once mounted.
 ok "Mount points ready"
 
 PG_UID=$(id -u postgres)
