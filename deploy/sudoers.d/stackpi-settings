@@ -1,0 +1,4 @@
+# Allow the StackPI API (running as csg) to invoke the settings helper as
+# root without a password. The helper itself is the only privileged surface
+# and it lives in root-owned /usr/local/sbin, so csg cannot modify it.
+csg ALL=(root) NOPASSWD: /usr/local/sbin/stackpi-settings-helper.sh

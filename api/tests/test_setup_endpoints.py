@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import setup as setup_mod
+from app import settings as settings_mod
 from app import rfid_status
 
 client = TestClient(app)
@@ -45,6 +46,15 @@ def test_reader_settings_proxies(monkeypatch):
         return {"success": True}
 
     monkeypatch.setattr(setup_mod, "_basecamp", fake)
+    # Intercept the active-reader persistence so the test never writes to the
+    # real local_app_settings; also assert the committed reader is recorded.
+    persisted = {}
+
+    def fake_persist(key, value):
+        persisted[key] = value
+        return True
+
+    monkeypatch.setattr(settings_mod, "_persist_setting", fake_persist)
     r = client.post(
         "/local/setup/reader-settings",
         json={"reader_name": "FX-1", "site_id": 10, "scan_type_id": 42},
@@ -53,6 +63,8 @@ def test_reader_settings_proxies(monkeypatch):
     assert captured["args"][0] == "PATCH"
     assert captured["args"][1] == "/stackpi/rfid/reader-settings"
     assert captured["args"][2] == {"reader_name": "FX-1", "site_id": 10, "scan_type_id": 42}
+    # New behavior: the committed reader becomes the kiosk's active reader.
+    assert persisted.get(setup_mod.ACTIVE_READER_NAME_KEY) == "FX-1"
 
 
 def test_no_token_returns_409(monkeypatch):

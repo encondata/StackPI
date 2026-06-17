@@ -1,0 +1,34 @@
+[Unit]
+Description=StackPI Kiosk (Sway + Chromium, multi-output)
+After=stackpi-portal.service systemd-user-sessions.service
+Wants=stackpi-portal.service
+Conflicts=getty@tty1.service
+
+# Manual one-time Pi prep (not automated yet):
+#   - User csg must be in groups: video, input, render, tty
+#       sudo usermod -a -G video,input,render,tty csg
+#   - Disable any autologin / lightdm so this unit owns tty1
+#   - XDG_RUNTIME_DIR below assumes csg is uid 1000
+
+[Service]
+Type=simple
+User=csg
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+# Wait up to 60s for the portal on :80 before launching the browsers.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -sf http://localhost/ >/dev/null && exit 0; sleep 1; done; exit 1'
+# Fresh per-window chromium profile dirs on tmpfs — avoids stale SingletonLock
+# after reboot/hostname changes and keeps the two windows isolated.
+ExecStartPre=/bin/sh -c 'rm -rf /tmp/stackpi-chromium-config /tmp/stackpi-chromium-info && install -d -o csg -g csg /tmp/stackpi-chromium-config /tmp/stackpi-chromium-info'
+ExecStart=/usr/bin/sway -c /etc/stackpi/sway-kiosk.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=StackPI scan uploader (oneshot)
+After=network-online.target postgresql.service stackpi-api.service stackpi-engine.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=csg
+WorkingDirectory=/home/csg/StackPI_v2/api
+ExecStart=/home/csg/StackPI_v2/api/.venv/bin/python -m app.scan_uploader
+# Cap a stuck cycle so it can't pile up across timer fires. POST timeout
+# is 25s; allow some headroom for the DB transactions on either side.
+TimeoutStartSec=90
+
+# No StateDirectory — the script writes only to postgres, no local files.
+
+[Install]
+WantedBy=multi-user.target

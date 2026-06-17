@@ -1,0 +1,17 @@
+[Unit]
+Description=StackPI RFID polling cadence
+After=network-online.target
+
+[Timer]
+# Fire 2 minutes after boot so the API + DB + engine are stable before we
+# start hitting readers, then once per minute. The script self-throttles
+# based on RFID_Polling_Refresh in local_app_settings — so this fixed
+# 1-minute cadence is just the granularity at which setting changes take
+# effect, NOT how often each reader is actually polled.
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=stackpi-rfid-poll.service
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

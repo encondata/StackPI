@@ -119,8 +119,15 @@ def fire(
             return False
         _last_fired[id_hex] = now
 
-        label = serial or name or id_hex
-        msg = "Not in move: " + label + (f" at {reader_name}" if reader_name else "")
+        # Show the serial number and the RFID tag (id_hex) — not the asset
+        # name — so the operator can physically locate/identify the tag. The
+        # tag is zero-padded hex; trim leading zeros for a readable display
+        # (an all-zero tag keeps a single '0'). Matching still uses the full
+        # id_hex — this is display only.
+        tag = id_hex.lstrip("0") or "0"
+        label = (f"SN {serial} · " if serial else "") + f"Tag {tag}"
+        # Reader name is intentionally omitted from the on-screen message.
+        msg = "Not in move: " + label
         play_sound()
         from app import system_events  # noqa: PLC0415
         # detail carries severity → drives the flash color (critical=red,

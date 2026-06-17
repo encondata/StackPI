@@ -1,0 +1,22 @@
+[Unit]
+Description=StackPI API (FastAPI)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=csg
+WorkingDirectory=/home/csg/StackPI_v2/api
+ExecStart=/home/csg/StackPI_v2/api/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-/home/csg/StackPI_v2/.env
+
+# Shared with the engine — both services own files under /var/lib/stackpi.
+# The api uses it for state that must survive reboot (e.g. the operator's
+# active move/event selection), independently of the tmpfs Postgres
+# cluster which only snapshots every 5 minutes.
+StateDirectory=stackpi
+StateDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

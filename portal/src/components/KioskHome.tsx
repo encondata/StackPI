@@ -3,24 +3,24 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { FlashAlertOverlay } from "@/components/FlashAlertOverlay";
+import { RfidReaderCard } from "@/components/RfidReaderCard";
 import {
   Rocket,
   Settings,
   Globe,
-  SquareDashed,
   type LucideIcon,
 } from "lucide-react";
 
-// The four home cards. "Internet" navigates to /internet; the others are
-// placeholders for now. "Un-Used" is rendered dimmed. Icons are from
+// The first three home cards. "Internet" navigates to /internet; the others
+// are placeholders for now. The 4th cell is the live RFID Reader card
+// (status + start/stop), rendered separately below. Icons are from
 // lucide-react (already a dependency).
 type HomeCardDef = { title: string; Icon: LucideIcon; dimmed?: boolean; href?: string };
 
 const HOME_CARDS: HomeCardDef[] = [
   { title: "Initial Setup", Icon: Rocket, href: "/initial-setup" },
-  { title: "Config", Icon: Settings },
+  { title: "Config", Icon: Settings, href: "/device-config" },
   { title: "Internet", Icon: Globe, href: "/internet" },
-  { title: "Un-Used", Icon: SquareDashed, dimmed: true },
 ];
 
 // Shown on / when the device is registered. 800×480 touchscreen home:
@@ -88,6 +88,7 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
             href={c.href}
           />
         ))}
+        <RfidReaderCard />
       </section>
       <HomeStatusBar time={time} dateStr={dateStr} host={host} offline={offline} />
     </main>

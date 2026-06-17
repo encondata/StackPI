@@ -1,0 +1,18 @@
+[Unit]
+Description=StackPI PostgreSQL (in-memory cluster on tmpfs)
+Requires=stackpi-pg-bootstrap.service
+After=stackpi-pg-bootstrap.service
+ConditionPathExists=/var/lib/postgresql-mem/PG_VERSION
+
+[Service]
+Type=notify
+User=postgres
+Group=postgres
+ExecStart=/usr/lib/postgresql/17/bin/postgres -D /var/lib/postgresql-mem
+KillSignal=SIGINT
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

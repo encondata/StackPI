@@ -1,0 +1,17 @@
+[Unit]
+Description=StackPI scan-upload cadence
+After=network-online.target
+
+[Timer]
+# Fire 90s after boot so the API + DB + engine are stable before we start
+# hitting BaseCamp, then every 30s. The script self-throttles: empty queue
+# returns fast (~50ms), a real batch takes seconds depending on payload
+# size. Concurrent ticks are safe — the SELECT … FOR UPDATE SKIP LOCKED
+# in the picker makes overlapping fires harmless.
+OnBootSec=90s
+OnUnitActiveSec=30s
+Unit=stackpi-scan-upload.service
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

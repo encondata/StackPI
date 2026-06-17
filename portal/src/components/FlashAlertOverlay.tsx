@@ -24,8 +24,11 @@ export function FlashAlertOverlay() {
           kind?: string;
           message?: string;
           detail?: string | null;
+          replay?: boolean;
         };
-        if (d.kind !== "alert") return;
+        // Only flash on a genuinely new scan — never replay the connect-time
+        // backlog on page refresh / SSE reconnect / API restart.
+        if (d.kind !== "alert" || d.replay) return;
         nonceRef.current += 1;
         setAlert({
           message: d.message ?? "Alert",

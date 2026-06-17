@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stackpi-engine"
+version = "0.1.0"
+description = "StackPI registration + heartbeat agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic-settings>=2.4,<3.0",
+  "requests>=2.32,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9.0",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

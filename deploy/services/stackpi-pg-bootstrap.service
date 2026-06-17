@@ -1,0 +1,13 @@
+[Unit]
+Description=StackPI Postgres bootstrap (initdb + restore latest snapshot if needed)
+RequiresMountsFor=/var/lib/postgresql-mem /mnt/stackpi-data
+After=var-lib-postgresql\x2dmem.mount mnt-stackpi\x2ddata.mount
+Before=stackpi-postgresql.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/stackpi-pg-bootstrap.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -55,7 +55,7 @@ type StyleProps = {
 export function ChangeBorder({
   style,
   ...rest
-}: StyleProps & { style: ChangeBorderStyle }) {
+}: StyleProps & { style: ChangeBorderStyle; loop?: boolean }) {
   if (style === "pulse") return <PulseBorder {...rest} />;
   if (style === "dual") return <DualBorder {...rest} />;
   return <CometBorder {...rest} />;
@@ -124,7 +124,7 @@ function rectProps(color: string, widthPx: number, cornerRadiusPx: number) {
 
 // Comet: a single glowing head+trail dash travels the perimeter, one full
 // revolution per cycle, at constant speed.
-function CometBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps) {
+function CometBorder({ color, widthPx, cornerRadiusPx, cycleCount, loop = false }: StyleProps & { loop?: boolean }) {
   const glowId = useGlowId();
   const ref = useRef<SVGRectElement>(null);
   useLayoutEffect(() => {
@@ -139,11 +139,12 @@ function CometBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps)
           attr: { "stroke-dashoffset": -100 * cycles },
           duration: changeBorderDurationMs("comet", cycleCount) / 1000,
           ease: "none",
+          repeat: loop ? -1 : 0,
         },
       );
     });
     return () => ctx.revert();
-  }, [cycleCount]);
+  }, [cycleCount, loop]);
   return (
     <BorderSvg widthPx={widthPx} glowId={glowId}>
       <rect
@@ -157,7 +158,7 @@ function CometBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps)
 }
 
 // Dual: two glowing segments offset half a perimeter apart chase together.
-function DualBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps) {
+function DualBorder({ color, widthPx, cornerRadiusPx, cycleCount, loop = false }: StyleProps & { loop?: boolean }) {
   const glowId = useGlowId();
   const aRef = useRef<SVGRectElement>(null);
   const bRef = useRef<SVGRectElement>(null);
@@ -177,12 +178,13 @@ function DualBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps) 
             attr: { "stroke-dashoffset": -(start + 100 * cycles) },
             duration: dur,
             ease: "none",
+            repeat: loop ? -1 : 0,
           },
         );
       });
     });
     return () => ctx.revert();
-  }, [cycleCount]);
+  }, [cycleCount, loop]);
   const rp = rectProps(color, widthPx, cornerRadiusPx);
   return (
     <BorderSvg widthPx={widthPx} glowId={glowId}>
@@ -193,7 +195,7 @@ function DualBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps) 
 }
 
 // Pulse: the whole perimeter ignites and dims `cycleCount` times, then fades.
-function PulseBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps) {
+function PulseBorder({ color, widthPx, cornerRadiusPx, cycleCount, loop = false }: StyleProps & { loop?: boolean }) {
   const glowId = useGlowId();
   const ref = useRef<SVGRectElement>(null);
   useLayoutEffect(() => {
@@ -202,7 +204,7 @@ function PulseBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps)
     const cycles = Math.max(1, cycleCount);
     const per = CHANGE_BORDER_STYLES.pulse.perCycleMs / 1000;
     const ctx = gsap.context(() => {
-      const tl = gsap.timeline();
+      const tl = gsap.timeline({ repeat: loop ? -1 : 0 });
       tl.set(el, { opacity: 0 });
       for (let i = 0; i < cycles; i++) {
         tl.to(el, { opacity: 1, duration: per * 0.3, ease: "power2.out" }).to(
@@ -210,10 +212,12 @@ function PulseBorder({ color, widthPx, cornerRadiusPx, cycleCount }: StyleProps)
           { opacity: 0.2, duration: per * 0.7, ease: "sine.inOut" },
         );
       }
-      tl.to(el, { opacity: 0, duration: 0.2, ease: "power2.in" });
+      // When looping (continuous "reading" indicator) keep pulsing without a
+      // full fade-out between groups; a single fire fades out at the end.
+      if (!loop) tl.to(el, { opacity: 0, duration: 0.2, ease: "power2.in" });
     });
     return () => ctx.revert();
-  }, [cycleCount]);
+  }, [cycleCount, loop]);
   return (
     <BorderSvg widthPx={widthPx} glowId={glowId}>
       <rect

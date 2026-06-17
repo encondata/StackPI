@@ -1,0 +1,17 @@
+[Unit]
+Description=StackPI pgweb (Postgres admin UI)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=csg
+# pgweb has no built-in auth; --bind=0.0.0.0 exposes it on the LAN. That's
+# acceptable for a private deployment but should be locked down (--auth-user,
+# --auth-pass, or fronting it behind nginx auth) before any wider exposure.
+ExecStart=/usr/local/bin/pgweb --bind=0.0.0.0 --listen=8081 --url=postgresql://csg:csg@localhost:5432/stackpi?sslmode=disable
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

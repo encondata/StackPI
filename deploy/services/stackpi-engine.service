@@ -1,0 +1,21 @@
+[Unit]
+Description=StackPI Engine (registration + heartbeat agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=csg
+WorkingDirectory=/home/csg/StackPI_v2/engine
+ExecStart=/home/csg/StackPI_v2/engine/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-/home/csg/StackPI_v2/.env
+
+# Creates /var/lib/stackpi/ owned by csg, mode 0750. The agent writes
+# state.json inside with file mode 0600.
+StateDirectory=stackpi
+StateDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

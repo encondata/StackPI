@@ -1,0 +1,15 @@
+[Unit]
+Description=StackPI RFID reader status poll (oneshot)
+After=network-online.target postgresql.service stackpi-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=csg
+WorkingDirectory=/home/csg/StackPI_v2/api
+ExecStart=/home/csg/StackPI_v2/api/.venv/bin/python -m app.rfid_status
+# stdout/stderr go to journal by default. Cap a stuck poll cycle so it
+# can't pile up across timer fires.
+TimeoutStartSec=120
+
+# No StateDirectory — the script writes only to postgres, no local files.

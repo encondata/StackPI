@@ -1,0 +1,19 @@
+[Unit]
+Description=StackPI Portal (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=csg
+WorkingDirectory=/home/csg/StackPI_v2/portal
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=80
+# Let the unprivileged csg user bind to port 80 without nginx in the path.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

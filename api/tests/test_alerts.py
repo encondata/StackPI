@@ -21,6 +21,39 @@ def test_fire_debounces_per_tag(monkeypatch):
     assert len(emitted) == 2
     # event uses source 'rfid-alert', kind 'alert', severity in detail
     assert emitted[0][0] == "rfid-alert" and emitted[0][1] == "alert"
+    # Message shows the serial number AND the RFID tag (id_hex) — no name, no
+    # reader name (reader_name is passed but never shown).
+    assert emitted[0][2] == "Not in move: SN S1 · Tag TAG1"
+    # No serial → tag only.
+    assert emitted[1][2] == "Not in move: Tag TAG2"
+
+
+def test_fire_message_prefers_tag_over_name(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(alerts, "play_sound", lambda: None)
+    monkeypatch.setattr(system_events, "emit", lambda *a, **k: emitted.append(a) or True)
+    monkeypatch.setattr(alerts, "_get_int", lambda k, d, lo, hi: 30)
+    alerts._last_fired.clear()
+
+    # Even when a name + reader are supplied, the message uses only serial + tag.
+    alerts.fire("ABC123", serial="SN9", name="Big Server", reader_name="Dock-2")
+    assert emitted[0][2] == "Not in move: SN SN9 · Tag ABC123"
+
+
+def test_fire_message_trims_leading_zeros_on_tag(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(alerts, "play_sound", lambda: None)
+    monkeypatch.setattr(system_events, "emit", lambda *a, **k: emitted.append(a) or True)
+    monkeypatch.setattr(alerts, "_get_int", lambda k, d, lo, hi: 30)
+    alerts._last_fired.clear()
+
+    alerts.fire("00000000000000ABCD12", serial="S1")
+    assert emitted[0][2] == "Not in move: SN S1 · Tag ABCD12"
+
+    # An all-zero tag keeps a single '0' (never an empty label).
+    alerts._last_fired.clear()
+    alerts.fire("0000")
+    assert emitted[-1][2] == "Not in move: Tag 0"
 
 
 def test_config_endpoint_shape():

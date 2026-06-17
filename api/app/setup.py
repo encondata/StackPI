@@ -106,12 +106,27 @@ class ReaderSettingsRequest(BaseModel):
     scan_type_id: int
 
 
+# local_app_settings key recording which reader the kiosk home card controls.
+# Set when the Initial Setup commit succeeds; read by GET /local/rfid/active-reader.
+ACTIVE_READER_NAME_KEY = "active_reader_name"
+
+
 @router.post("/reader-settings")
 def set_reader_settings(body: ReaderSettingsRequest) -> Dict[str, Any]:
     """Set the reader's site + scan type on the portal, matched by name
-    (proxies BaseCampV2 PATCH /stackpi/rfid/reader-settings)."""
-    return _basecamp("PATCH", "/stackpi/rfid/reader-settings", {
+    (proxies BaseCampV2 PATCH /stackpi/rfid/reader-settings).
+
+    On success we also record this reader's name locally as the kiosk's
+    "active reader" so the home screen's RFID Reader card knows which reader
+    to show status for and start/stop. Best-effort — a failure to persist
+    the setting must not turn a successful portal commit into an error."""
+    result = _basecamp("PATCH", "/stackpi/rfid/reader-settings", {
         "reader_name": body.reader_name,
         "site_id": body.site_id,
         "scan_type_id": body.scan_type_id,
     })
+    from app.settings import _persist_setting  # noqa: PLC0415
+
+    if not _persist_setting(ACTIVE_READER_NAME_KEY, body.reader_name.strip()):
+        log.warning("failed to persist %s=%r", ACTIVE_READER_NAME_KEY, body.reader_name)
+    return result

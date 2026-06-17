@@ -1,0 +1,9 @@
+[Unit]
+Description=Snapshot the StackPI in-memory DB to USB
+Requires=stackpi-postgresql.service
+After=stackpi-postgresql.service
+RequiresMountsFor=/mnt/stackpi-data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/stackpi-pg-snapshot.sh

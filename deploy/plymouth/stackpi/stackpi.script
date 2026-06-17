@@ -1,0 +1,26 @@
+// StackPI plymouth splash — dark background with the logo centered.
+//
+// Plymouth's script module runs this every frame; the language is a
+// stripped-down C-like with built-in Window / Image / Sprite objects.
+// We keep this dead simple: solid background colour + a single sprite,
+// no animation. Boot is short enough that motion is more distracting
+// than useful.
+
+// Background: deep near-black to match the sway wallpaper fill so the
+// plymouth → sway transition is visually continuous.
+Window.SetBackgroundTopColor(0.051, 0.051, 0.071);     // #0d0d12
+Window.SetBackgroundBottomColor(0.051, 0.051, 0.071);
+
+logo.image  = Image("stackpi.png");
+logo.sprite = Sprite(logo.image);
+
+// Center the logo. Plymouth resolves Window.GetWidth/Height() against
+// whatever framebuffer the active console is on, so this works on both
+// the PITFT and the HDMI monitor without per-Pi tweaks.
+logo.sprite.SetX(Window.GetWidth()  / 2 - logo.image.GetWidth()  / 2);
+logo.sprite.SetY(Window.GetHeight() / 2 - logo.image.GetHeight() / 2);
+
+// We intentionally don't implement the progress / password callbacks —
+// plymouth will silently no-op them. We never password-prompt at boot
+// (no full-disk encryption) and the boot is too short for a visible
+// progress bar to add value.

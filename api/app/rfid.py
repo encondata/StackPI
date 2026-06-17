@@ -580,6 +580,98 @@ def stop_reader_route(reader_id: int) -> Dict[str, Any]:
     return _control_route(int(reader_id), "stop")
 
 
+# ---------------------------------------------------------------------------
+# Active reader — drives the kiosk home "RFID Reader" card
+# ---------------------------------------------------------------------------
+#
+# The home card shows a single stoplight for the reader chosen in Initial
+# Setup (persisted as local_app_settings.active_reader_name by
+# app.setup.set_reader_settings) and lets the operator start/stop reading.
+#
+# State derivation mirrors the /status page's per-reader traffic light exactly
+# (red/yellow/blue/green), with yellow taking precedence over green:
+#   * offline  (red)    : last_error set, OR no last_status snapshot yet
+#   * degraded (yellow) : reachable, but not every output connector is connected
+#   * reading  (green)  : connectors all connected AND radioActivity == "active"
+#   * online   (blue)   : connectors all connected, radio not active
+# Plus "unconfigured" when no active reader name is stored or it no longer
+# matches a configured reader. This endpoint is a pure DB read — it never
+# contacts the reader, so the card can poll it cheaply; the reader is only
+# contacted by the existing poll script (systemd timer) and on start/stop.
+
+ACTIVE_READER_NAME_KEY = "active_reader_name"
+
+
+def _derive_reader_state(last_error: Optional[str], last_status: Any) -> str:
+    """Map a reader's persisted (last_error, last_status) to one of
+    'offline' | 'degraded' | 'online' | 'reading'. Mirrors status/page.tsx —
+    including yellow (degraded) winning over green (reading)."""
+    if last_error or not isinstance(last_status, dict):
+        return "offline"
+    # Yellow if any output connector is non-connected, or we can't confirm any
+    # (empty list) — same condition the /status page uses.
+    ics = last_status.get("interfaceConnectionStatus")
+    data = ics.get("data") if isinstance(ics, dict) else None
+    interfaces = data if isinstance(data, list) else []
+    all_connected = len(interfaces) > 0 and all(
+        str((i or {}).get("connectionStatus") or "").lower() == "connected"
+        for i in interfaces
+    )
+    if not all_connected:
+        return "degraded"
+    activity = last_status.get("radioActivity") or last_status.get("radioActivitiy")
+    if str(activity or "").lower() == "active":
+        return "reading"
+    return "online"
+
+
+@router.get("/active-reader")
+def get_active_reader() -> Dict[str, Any]:
+    """Status of the kiosk's active reader (chosen in Initial Setup), for the
+    home RFID Reader card. Pure DB read — does not contact the reader.
+
+    Returns one of:
+      {"configured": false, "state": "unconfigured"}                    no active reader
+      {"configured": true, "reader_id", "name", "state", ...}           otherwise
+    where state is 'offline' | 'reading' | 'online'.
+    """
+    from app.settings import _get_setting_str  # noqa: PLC0415
+
+    name = (_get_setting_str(ACTIVE_READER_NAME_KEY, "") or "").strip()
+    if not name:
+        return {"configured": False, "state": "unconfigured"}
+
+    # _psql_json runs `psql -tAc` with no bound params, so the name is
+    # single-quoted with the standard SQL '' escape before interpolation.
+    name_literal = "'" + name.replace("'", "''") + "'"
+    rows = _psql_json(
+        f"""
+        SELECT COALESCE(jsonb_agg(r ORDER BY id), '[]'::jsonb) FROM (
+          SELECT id, name, enabled, last_error, last_status, last_status_at
+          FROM local_rfid_readers
+          WHERE name = {name_literal}
+          ORDER BY id
+          LIMIT 1
+        ) r
+        """
+    ) or []
+    if not rows:
+        # The stored name no longer matches any configured reader.
+        return {"configured": False, "state": "unconfigured", "name": name}
+
+    row = rows[0]
+    state = _derive_reader_state(row.get("last_error"), row.get("last_status"))
+    return {
+        "configured": True,
+        "reader_id": row.get("id"),
+        "name": row.get("name"),
+        "enabled": row.get("enabled"),
+        "state": state,
+        "last_status_at": row.get("last_status_at"),
+        "last_error": row.get("last_error"),
+    }
+
+
 @router.get("/readers/{reader_id}/mode")
 def get_reader_mode_route(reader_id: int) -> Dict[str, Any]:
     """GET /cloud/mode with {verbose: true}. Returns {ok, reader_id, mode}.

@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic snapshot of stackpi DB to USB
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=stackpi-pg-snapshot.service
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

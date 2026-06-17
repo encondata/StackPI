@@ -61,7 +61,7 @@ The development environment is macOS. The production and integration target is R
 
 ### Reverse Proxy
 
-- Caddy
+- Nginx
 
 ### Service Management
 
@@ -71,7 +71,7 @@ The development environment is macOS. The production and integration target is R
 
 The system runs as separate services on the same host:
 
-- `caddy`
+- `nginx`
 - `api`
 - `engine`
 - `portal`
@@ -79,8 +79,8 @@ The system runs as separate services on the same host:
 
 High-level flow:
 
-1. Caddy receives external traffic.
-2. Caddy routes API traffic to FastAPI and dashboard traffic to Next.js.
+1. Nginx receives external traffic.
+2. Nginx routes API traffic to FastAPI and dashboard traffic to Next.js.
 3. FastAPI validates requests and writes persistent state to PostgreSQL.
 4. FastAPI records work items or state transitions for asynchronous processing.
 5. The Python worker reads those work items and executes business logic.
@@ -154,8 +154,8 @@ project-root/
       app-api.service
       app-engine.service
       app-portal.service
-    caddy/
-      Caddyfile
+    nginx/
+      stackpi.conf
   scripts/
   .env.example
   README.md
@@ -193,7 +193,7 @@ A fresh Raspberry Pi should be bootstrappable from scripts in the repository. Th
 
 - package installation steps
 - service unit installation
-- Caddy configuration installation
+- Nginx configuration installation
 - environment file guidance
 - app build and restart flow
 
@@ -203,7 +203,7 @@ The initial deployment is single-host and service-based.
 
 Expected production services:
 
-- `caddy`
+- `nginx`
 - `postgresql`
 - `stackpi-api`
 - `stackpi-engine`
@@ -228,7 +228,7 @@ Expected production services:
 
 ### Ops
 
-- Caddy
+- Nginx
 - PostgreSQL
 - `systemd`
 
@@ -239,7 +239,7 @@ Expected production services:
 3. Add PostgreSQL connectivity and migration support
 4. Add a worker service skeleton with a simple processing loop
 5. Add a Next.js admin shell with a basic status page
-6. Add Caddy routes for API and portal traffic
+6. Add Nginx routes for API and portal traffic
 7. Add `systemd` unit files for each app service
 8. Add `bootstrap-pi.sh`
 9. Add `deploy.sh`
@@ -253,7 +253,7 @@ The first meaningful vertical slice is complete when:
 - the database connection initializes successfully
 - the worker process starts and logs its heartbeat
 - the Next.js portal renders a basic admin shell
-- Caddy can proxy API and portal routes correctly in a deployment-like setup
+- Nginx can proxy API and portal routes correctly in a deployment-like setup
 
 ## Risks And Tradeoffs
 
