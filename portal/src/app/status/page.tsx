@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRevocationGuard } from "@/hooks/useRevocationGuard";
+import { FlashAlertOverlay } from "@/components/FlashAlertOverlay";
 import {
   ChangeBorder,
   changeBorderDurationMs,
@@ -881,6 +882,7 @@ export default function StatusPage() {
 
   return (
     <main className="grid h-screen w-screen grid-rows-12 gap-3 overflow-hidden bg-zinc-950 p-3 text-zinc-100">
+      <FlashAlertOverlay />
       <section className="row-span-2 grid grid-cols-8 gap-3">
         <MetricCard label="Tags Today"   value={metric(metrics.tags_today)}   chaseColor={changeBorderColor} chaseStyle={changeBorderStyle} chaseWidthPx={changeBorderWidthPx} chaseCycleCount={changeBorderCycleCount} forceFire={cardForceFire[0]} />
         <MetricCard label="Unique Tags"  value={metric(metrics.unique_tags_today)} chaseColor={changeBorderColor} chaseStyle={changeBorderStyle} chaseWidthPx={changeBorderWidthPx} chaseCycleCount={changeBorderCycleCount} forceFire={cardForceFire[1]} />
