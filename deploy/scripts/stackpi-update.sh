@@ -51,11 +51,14 @@ case "$cmd" in
     # deploy.sh reinstalls during the update).
     install -m 0755 "$0" "$RUN_COPY"
 
+    # /run is mounted noexec, so systemd cannot EXEC the snapshot directly
+    # (fails at 203/EXEC "Permission denied"). Invoke it THROUGH bash instead:
+    # reading a script file is allowed under noexec; executing it is not.
     systemd-run \
       --unit="$UNIT" \
       --collect \
       --setenv=STACKPI_REPO_DIR="$REPO_DIR" \
-      "$RUN_COPY" run
+      /bin/bash "$RUN_COPY" run
     echo "update started"
     ;;
 

@@ -29,6 +29,7 @@ router = APIRouter(prefix="/local/update", tags=["update"])
 REPO_DIR = Path(__file__).resolve().parents[2]
 
 UPDATER = "/usr/local/sbin/stackpi-update.sh"
+UPDATE_UNIT = "stackpi-update.service"
 STATE_FILE = Path("/run/stackpi/update.state")
 LOG_FILE = Path("/run/stackpi/update.log")
 
@@ -76,12 +77,39 @@ def _fetch() -> bool:
 
 
 def _run_state() -> str:
-    """Current updater run state: idle | running | success | failed."""
+    """Raw updater run state from the state file: idle | running | success |
+    failed. May be stale — see _effective_state."""
     try:
         s = STATE_FILE.read_text(encoding="utf-8").strip()
         return s or "idle"
     except OSError:
         return "idle"
+
+
+def _unit_active() -> bool:
+    """True iff the updater's transient systemd unit is currently active. This
+    is the authoritative 'an update is in progress' signal: a stale 'running'
+    state file (e.g. a unit that died at launch before recording a result) must
+    NOT be trusted as a lock, or it would wedge the endpoint and UI forever."""
+    try:
+        return (
+            subprocess.run(
+                ["systemctl", "is-active", "--quiet", UPDATE_UNIT], timeout=5
+            ).returncode
+            == 0
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _effective_state() -> str:
+    """Run state reconciled against reality: a 'running' file with no live unit
+    means the run died without recording a result — report it as 'failed' so
+    the UI doesn't spin forever."""
+    state = _run_state()
+    if state == "running" and not _unit_active():
+        return "failed"
+    return state
 
 
 def _log_tail(lines: int = LOG_TAIL_LINES) -> str:
@@ -146,15 +174,17 @@ def update_status() -> dict:
         "behind": behind,
         "update_available": behind > 0,
         "fetch_ok": fetch_ok,
-        "state": _run_state(),
+        "state": _effective_state(),
         "log_tail": _log_tail(),
     }
 
 
 @router.post("/start")
 def update_start() -> dict:
-    """Kick off an update. Idempotent while one is already running."""
-    if _run_state() == "running":
+    """Kick off an update. Idempotent while one is genuinely running (judged by
+    the live systemd unit, not the state file, so a stale state can't lock out
+    retries)."""
+    if _unit_active():
         return {"ok": True, "started": False, "already_running": True, "state": "running"}
     try:
         _trigger_update()

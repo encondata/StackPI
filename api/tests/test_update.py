@@ -74,7 +74,7 @@ def test_status_git_error_is_500(monkeypatch) -> None:
 
 def test_start_triggers_updater(monkeypatch) -> None:
     calls = {"n": 0}
-    monkeypatch.setattr(update_mod, "_run_state", lambda: "idle")
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
     monkeypatch.setattr(update_mod, "_trigger_update", lambda: calls.__setitem__("n", calls["n"] + 1))
 
     r = client.post("/local/update/start")
@@ -83,27 +83,62 @@ def test_start_triggers_updater(monkeypatch) -> None:
     assert calls["n"] == 1
 
 
-def test_start_is_idempotent_while_running(monkeypatch) -> None:
+def test_start_is_idempotent_while_unit_active(monkeypatch) -> None:
     triggered = {"n": 0}
-    monkeypatch.setattr(update_mod, "_run_state", lambda: "running")
+    # The live systemd unit — not the state file — is the lock.
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: True)
     monkeypatch.setattr(update_mod, "_trigger_update", lambda: triggered.__setitem__("n", triggered["n"] + 1))
 
     body = client.post("/local/update/start").json()
     assert body["already_running"] is True
     assert body["started"] is False
-    # Must NOT have launched a second run.
     assert triggered["n"] == 0
+
+
+def test_start_not_blocked_by_stale_running_state(monkeypatch) -> None:
+    # Regression: a 'running' state file left by a launch failure must NOT block
+    # a retry. The decision is the unit, which is inactive here.
+    triggered = {"n": 0}
+    monkeypatch.setattr(update_mod, "_run_state", lambda: "running")
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
+    monkeypatch.setattr(update_mod, "_trigger_update", lambda: triggered.__setitem__("n", triggered["n"] + 1))
+
+    body = client.post("/local/update/start").json()
+    assert body["started"] is True
+    assert triggered["n"] == 1
 
 
 def test_start_surfaces_trigger_failure(monkeypatch) -> None:
     def boom() -> None:
         raise RuntimeError("sudo: a password is required")
 
-    monkeypatch.setattr(update_mod, "_run_state", lambda: "idle")
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
     monkeypatch.setattr(update_mod, "_trigger_update", boom)
 
     r = client.post("/local/update/start")
     assert r.status_code == 500
+
+
+# --- state reconciliation --------------------------------------------------
+
+def test_effective_state_reconciles_dead_run(monkeypatch) -> None:
+    # State file says running but the unit is gone → the run died → 'failed'.
+    monkeypatch.setattr(update_mod, "_run_state", lambda: "running")
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
+    assert update_mod._effective_state() == "failed"
+
+
+def test_effective_state_running_when_unit_active(monkeypatch) -> None:
+    monkeypatch.setattr(update_mod, "_run_state", lambda: "running")
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: True)
+    assert update_mod._effective_state() == "running"
+
+
+def test_effective_state_passthrough_non_running(monkeypatch) -> None:
+    monkeypatch.setattr(update_mod, "_run_state", lambda: "success")
+    # Unit check is irrelevant for non-running states.
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
+    assert update_mod._effective_state() == "success"
 
 
 # --- file-reading helpers --------------------------------------------------
