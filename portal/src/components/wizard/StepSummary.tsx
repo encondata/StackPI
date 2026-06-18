@@ -1,25 +1,42 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, X, Circle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, X, Circle, Radio, Loader2, Home } from "lucide-react";
 import type { WizardState } from "./InitialSetupWizard";
 
 type RowStatus = "ok" | "pending" | "error";
+// idle → working → (commit_error | start_error | started). Both action buttons
+// save the settings; "Save & Start" then also starts the reader's radio.
+type Phase = "idle" | "working" | "commit_error" | "start_error" | "started";
+type Mode = "with_radio" | "no_radio";
 
-// Step 4: confirm + commit summary. Move is green when a sync succeeded and a
-// move is chosen; Site is green when selected; Scan Type is green once the
-// portal commit (POST reader-settings) returned 200, red on failure.
+const HOME_DELAY_MS = 2500;
+
+// Step 4: confirm, then commit + (optionally) start the RFID radio. The save
+// happens here (not on step 3's Next), so the operator chooses how to finish:
+// save and start reading, or save and leave the radio stopped.
 export function StepSummary({
   state,
-  committed,
-  commitError,
+  onHome,
 }: {
   state: WizardState;
-  committed: boolean;
-  commitError: string | null;
+  onHome: () => void;
 }) {
   const [syncOk, setSyncOk] = useState(false);
+  const [committed, setCommitted] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [mode, setMode] = useState<Mode>("with_radio");
+  const [busyLabel, setBusyLabel] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
 
+  useEffect(() => {
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // Move row turns green only when the cloud sync that backs it succeeded.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -41,9 +58,109 @@ export function StepSummary({
     };
   }, []);
 
+  // After a successful start, head back to the home screen shortly.
+  useEffect(() => {
+    if (phase !== "started") return;
+    const t = setTimeout(onHome, HOME_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [phase, onHome]);
+
+  async function commit(): Promise<boolean> {
+    if (!state.readerName || state.siteId == null || state.scanTypeId == null) {
+      setError("Missing reader, site, or scan type.");
+      return false;
+    }
+    try {
+      const r = await fetch("/local/setup/reader-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reader_name: state.readerName,
+          site_id: state.siteId,
+          scan_type_id: state.scanTypeId,
+        }),
+      });
+      if (r.ok) {
+        if (mounted.current) setCommitted(true);
+        return true;
+      }
+      const b = (await r.json().catch(() => null)) as { detail?: string } | null;
+      setError(b?.detail ?? "Failed to save reader settings.");
+      return false;
+    } catch {
+      setError("Failed to save reader settings.");
+      return false;
+    }
+  }
+
+  async function startRadio(): Promise<boolean> {
+    try {
+      // The reader we just saved is now the active reader; get its id.
+      const ar = await fetch("/local/rfid/active-reader", { cache: "no-store" });
+      const ad = (await ar.json().catch(() => null)) as
+        | { configured?: boolean; reader_id?: number | null }
+        | null;
+      if (!ar.ok || !ad?.configured || ad.reader_id == null) {
+        setError("No active reader to start.");
+        return false;
+      }
+      const sr = await fetch(`/local/rfid/readers/${ad.reader_id}/start`, { method: "POST" });
+      if (sr.ok) return true;
+      const sb = (await sr.json().catch(() => null)) as { detail?: string } | null;
+      setError(sb?.detail ?? "Failed to start the RFID radio.");
+      return false;
+    } catch {
+      setError("Failed to start the RFID radio.");
+      return false;
+    }
+  }
+
+  async function saveAndStart() {
+    setMode("with_radio");
+    setError(null);
+    setBusyLabel("Saving settings…");
+    setPhase("working");
+    if (!(await commit())) {
+      if (mounted.current) setPhase("commit_error");
+      return;
+    }
+    if (!mounted.current) return;
+    setBusyLabel("Starting RFID radio…");
+    const ok = await startRadio();
+    if (!mounted.current) return;
+    setPhase(ok ? "started" : "start_error");
+  }
+
+  async function saveOnly() {
+    setMode("no_radio");
+    setError(null);
+    setBusyLabel("Saving settings…");
+    setPhase("working");
+    const ok = await commit();
+    if (!mounted.current) return;
+    if (ok) onHome();
+    else setPhase("commit_error");
+  }
+
+  function retryCommit() {
+    if (mode === "with_radio") saveAndStart();
+    else saveOnly();
+  }
+
+  async function retryStart() {
+    setError(null);
+    setBusyLabel("Starting RFID radio…");
+    setPhase("working");
+    const ok = await startRadio();
+    if (!mounted.current) return;
+    setPhase(ok ? "started" : "start_error");
+  }
+
   const moveStatus: RowStatus = state.moveId != null && syncOk ? "ok" : "pending";
   const siteStatus: RowStatus = state.siteId != null ? "ok" : "pending";
-  const scanStatus: RowStatus = committed ? "ok" : commitError ? "error" : "pending";
+  const scanStatus: RowStatus = committed ? "ok" : phase === "commit_error" ? "error" : "pending";
+
+  const working = phase === "working";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
@@ -53,13 +170,83 @@ export function StepSummary({
       <SummaryRow label="Move" value={state.moveName ?? "—"} status={moveStatus} />
       <SummaryRow label="Site" value={state.siteName ?? "—"} status={siteStatus} />
       <SummaryRow label="Scan Type" value={state.scanTypeName ?? "—"} status={scanStatus} />
-      <p className="mt-1 text-xs text-zinc-500">
-        {committed
-          ? "Settings applied to the portal."
-          : commitError
-            ? `Apply failed — ${commitError}. Tap Retry to try again.`
-            : "Applying…"}
-      </p>
+
+      {phase === "started" ? (
+        <div className="flex items-center gap-2 rounded-lg border border-green-700 bg-green-950/40 px-3 py-2 text-sm text-green-300">
+          <Check className="h-4 w-4 flex-none" />
+          Settings saved and RFID radio started — now reading. Returning home…
+        </div>
+      ) : phase === "start_error" ? (
+        <div className="rounded-lg border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+          Settings saved, but the radio didn’t start — {error}
+        </div>
+      ) : phase === "commit_error" ? (
+        <div className="rounded-lg border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+          {error}
+        </div>
+      ) : working ? (
+        <div className="flex items-center gap-2 text-sm text-zinc-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> {busyLabel}
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-500">Choose how to finish setup.</p>
+      )}
+
+      <div className="mt-auto flex flex-col gap-2 pt-2">
+        {phase === "idle" || phase === "working" ? (
+          <>
+            <button
+              type="button"
+              onClick={saveAndStart}
+              disabled={working}
+              className="flex h-12 items-center justify-center gap-2 rounded-xl bg-green-600 text-base font-semibold text-white disabled:opacity-50"
+            >
+              <Radio className="h-5 w-5" /> Save Settings &amp; Start RFID Radio
+            </button>
+            <button
+              type="button"
+              onClick={saveOnly}
+              disabled={working}
+              className="flex h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-800 text-sm font-semibold text-zinc-200 disabled:opacity-50"
+            >
+              Save without starting radio
+            </button>
+          </>
+        ) : phase === "commit_error" ? (
+          <button
+            type="button"
+            onClick={retryCommit}
+            className="flex h-12 items-center justify-center rounded-xl bg-blue-600 text-base font-semibold text-white"
+          >
+            Retry
+          </button>
+        ) : phase === "start_error" ? (
+          <>
+            <button
+              type="button"
+              onClick={retryStart}
+              className="flex h-12 items-center justify-center gap-2 rounded-xl bg-green-600 text-base font-semibold text-white"
+            >
+              <Radio className="h-5 w-5" /> Retry Start
+            </button>
+            <button
+              type="button"
+              onClick={onHome}
+              className="flex h-11 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-800 text-sm font-semibold text-zinc-200"
+            >
+              Finish anyway
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={onHome}
+            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-green-600 text-base font-semibold text-white"
+          >
+            <Home className="h-5 w-5" /> Go to Home now
+          </button>
+        )}
+      </div>
     </div>
   );
 }

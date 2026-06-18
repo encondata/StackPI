@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { StepSelectMove } from "./StepSelectMove";
 import { StepReader } from "./StepReader";
 import { StepSiteScan } from "./StepSiteScan";
 import { StepSummary } from "./StepSummary";
-import { LoadingOverlay } from "@/components/LoadingOverlay";
 
 // Shared state threaded through the steps. Step 1 sets move*, Step 2 sets
-// readerName, Step 3 sets site*/scanType*, Step 4 commits to the portal.
+// readerName, Step 3 sets site*/scanType*. Step 4 (StepSummary) commits to the
+// portal and optionally starts the radio.
 export type WizardState = {
   moveId: number | null;
   moveName: string | null;
@@ -41,9 +41,6 @@ export function InitialSetupWizard() {
     scanTypeId: null,
     scanTypeName: null,
   });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [committed, setCommitted] = useState(false);
 
   const update = (patch: Partial<WizardState>) =>
     setState((s) => ({ ...s, ...patch }));
@@ -56,7 +53,6 @@ export function InitialSetupWizard() {
         : state.siteId != null && state.scanTypeId != null;
 
   function goPrev() {
-    setError(null);
     if (step === 1) {
       router.push("/");
       return;
@@ -65,49 +61,7 @@ export function InitialSetupWizard() {
   }
 
   function goNext() {
-    setError(null);
     setStep((s) => Math.min(LAST_STEP, s + 1));
-  }
-
-  async function runCommit(): Promise<boolean> {
-    if (!state.readerName || state.siteId == null || state.scanTypeId == null) return false;
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await fetch("/local/setup/reader-settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reader_name: state.readerName,
-          site_id: state.siteId,
-          scan_type_id: state.scanTypeId,
-        }),
-      });
-      if (r.ok) {
-        setCommitted(true);
-        return true;
-      }
-      const b = (await r.json().catch(() => null)) as { detail?: string } | null;
-      setError(b?.detail ?? "Failed to save reader settings.");
-      return false;
-    } catch {
-      setError("Failed to save reader settings.");
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // Step 3 "Next" commits to the portal, then advances to the Step 4 summary
-  // regardless of the result so the operator sees the status (green/red).
-  // Other steps just advance.
-  async function goNextOrCommit() {
-    if (step === 3) {
-      await runCommit();
-      setStep(LAST_STEP);
-      return;
-    }
-    goNext();
   }
 
   return (
@@ -132,12 +86,8 @@ export function InitialSetupWizard() {
         {step === 1 && <StepSelectMove state={state} update={update} />}
         {step === 2 && <StepReader state={state} update={update} />}
         {step === 3 && <StepSiteScan state={state} update={update} />}
-        {step === 4 && (
-          <StepSummary state={state} committed={committed} commitError={error} />
-        )}
+        {step === 4 && <StepSummary state={state} onHome={() => router.push("/")} />}
       </section>
-
-      {error && <p className="flex-none text-sm text-red-400">{error}</p>}
 
       <footer className="flex h-[52px] flex-none items-center gap-3 border-t border-zinc-800 pt-3">
         <button
@@ -151,42 +101,17 @@ export function InitialSetupWizard() {
         <span className="text-xs text-zinc-500">
           Step {step} of {LAST_STEP}
         </span>
-        {step < LAST_STEP ? (
+        {step < LAST_STEP && (
           <button
             type="button"
-            onClick={goNextOrCommit}
-            disabled={!canNext || busy}
+            onClick={goNext}
+            disabled={!canNext}
             className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
           >
-            {step === 3 && busy ? (
-              "Applying…"
-            ) : (
-              <>
-                Next <ArrowRight className="h-4 w-4" />
-              </>
-            )}
-          </button>
-        ) : committed ? (
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="flex h-10 items-center gap-2 rounded-lg bg-green-600 px-5 text-sm font-semibold text-white"
-          >
-            <Check className="h-4 w-4" /> Done
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={runCommit}
-            disabled={busy}
-            className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
-          >
-            {busy ? "Retrying…" : "Retry"}
+            Next <ArrowRight className="h-4 w-4" />
           </button>
         )}
       </footer>
-
-      <LoadingOverlay show={busy} label="Applying…" />
     </main>
   );
 }
