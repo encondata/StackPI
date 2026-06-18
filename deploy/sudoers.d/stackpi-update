@@ -1,0 +1,4 @@
+# Allow the StackPI API (running as csg) to trigger the software updater as
+# root without a password. The updater is the only privileged surface and it
+# lives in root-owned /usr/local/sbin, so csg cannot modify the script it runs.
+csg ALL=(root) NOPASSWD: /usr/local/sbin/stackpi-update.sh

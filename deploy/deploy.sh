@@ -22,6 +22,21 @@ info()  { printf '\n\033[1;34m>>> %s\033[0m\n' "$1"; }
 ok()    { printf '\033[1;32m  ✓ %s\033[0m\n' "$1"; }
 fail()  { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; exit 1; }
 
+# EUID-aware build steps. This script runs in two modes:
+#   * Interactively as the kiosk user (csg) — bootstrap and manual deploys.
+#   * As root — the in-app updater (stackpi-update.sh) runs us inside a
+#     transient systemd unit.
+# The privileged steps below use plain `sudo`, which works in BOTH modes (root
+# runs sudo without a prompt). Only the build/git steps differ: when we're root
+# they MUST drop to the repo owner so .git/.venv/node_modules stay user-owned
+# (npm/pip misbehave as root, and the services run as that user).
+BUILD_USER="${BUILD_USER:-$(stat -c '%U' "$REPO_DIR")}"
+if [[ $EUID -eq 0 ]]; then
+  asuser() { runuser -u "$BUILD_USER" -- "$@"; }
+else
+  asuser() { "$@"; }
+fi
+
 ###############################################################################
 # Pull latest code
 ###############################################################################
@@ -31,7 +46,7 @@ if [[ "${SKIP_GIT_PULL:-0}" == "1" ]]; then
   info "Skipping git pull (SKIP_GIT_PULL=1)"
 else
   info "Pulling latest code"
-  git pull --ff-only
+  asuser git pull --ff-only
   ok "Code updated"
 fi
 
@@ -41,9 +56,9 @@ fi
 
 info "Setting up API"
 cd "$REPO_DIR/api"
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip -q
-.venv/bin/pip install -e ".[dev]" -q
+asuser python3 -m venv .venv
+asuser .venv/bin/pip install --upgrade pip -q
+asuser .venv/bin/pip install -e ".[dev]" -q
 ok "API dependencies installed"
 
 ###############################################################################
@@ -52,9 +67,9 @@ ok "API dependencies installed"
 
 info "Setting up Engine"
 cd "$REPO_DIR/engine"
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip -q
-.venv/bin/pip install -e ".[dev]" -q
+asuser python3 -m venv .venv
+asuser .venv/bin/pip install --upgrade pip -q
+asuser .venv/bin/pip install -e ".[dev]" -q
 ok "Engine dependencies installed"
 
 ###############################################################################
@@ -63,8 +78,8 @@ ok "Engine dependencies installed"
 
 info "Setting up Portal"
 cd "$REPO_DIR/portal"
-npm ci
-npm run build
+asuser npm ci
+asuser npm run build
 ok "Portal built"
 
 ###############################################################################
@@ -173,6 +188,19 @@ if sudo visudo -c -f "$REPO_DIR/deploy/sudoers.d/stackpi-settings" >/dev/null; t
   ok "settings helper + sudoers drop-in installed"
 else
   fail "sudoers.d/stackpi-settings failed visudo syntax check; aborting"
+fi
+
+# Software updater: lets Config → Update trigger this very script (git pull +
+# rebuild + restart) as root, inside a transient systemd unit so it survives
+# the api/portal restart it performs. csg gets NOPASSWD for the one root-owned
+# script only — same locked-down posture as the settings helper above.
+info "Installing software updater + sudoers drop-in"
+sudo install -m 0755 "$REPO_DIR/deploy/scripts/stackpi-update.sh" /usr/local/sbin/
+if sudo visudo -c -f "$REPO_DIR/deploy/sudoers.d/stackpi-update" >/dev/null; then
+  sudo install -m 0440 "$REPO_DIR/deploy/sudoers.d/stackpi-update" /etc/sudoers.d/stackpi-update
+  ok "updater + sudoers drop-in installed"
+else
+  fail "sudoers.d/stackpi-update failed visudo syntax check; aborting"
 fi
 
 ###############################################################################

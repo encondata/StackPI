@@ -13,6 +13,7 @@ from app.screens import router as screens_router
 from app.settings import router as settings_router
 from app.setup import router as setup_router
 from app.alerts import router as alerts_router
+from app.update import router as update_router
 
 settings = get_settings()
 
@@ -32,6 +33,7 @@ app.include_router(portal_data_router)
 app.include_router(system_events_router)
 app.include_router(setup_router)
 app.include_router(alerts_router)
+app.include_router(update_router)
 
 
 @app.get("/")
