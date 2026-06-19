@@ -28,10 +28,18 @@ COMMON_ARGS=(
 # wrapper polls /local/screens/info1 and swaps an embedded iframe to whatever
 # the selector says (clock / status / trucks / cycle / off). Chromium itself
 # never has to be restarted to change views.
-"$CHROMIUM" "${COMMON_ARGS[@]}" \
-  --class=stackpi-info \
-  --user-data-dir=/tmp/stackpi-chromium-info \
-  http://localhost/screens/info1 &
+#
+# Only spawn it when its HDMI output (HDMI-A-1) is actually connected — same
+# reasoning as info2 below. On a touchscreen-only Pi (no HDMI) workspace 2
+# falls back onto DSI-1, so this window maps over the PITFT; sway then drops
+# the config window out of fullscreen to reveal the newcomer, leaving the
+# touchscreen showing chromium's toolbar. Gating it keeps the PITFT fullscreen.
+if swaymsg -t get_outputs 2>/dev/null | grep -q "HDMI-A-1"; then
+  "$CHROMIUM" "${COMMON_ARGS[@]}" \
+    --class=stackpi-info \
+    --user-data-dir=/tmp/stackpi-chromium-info \
+    http://localhost/screens/info1 &
+fi
 
 # Second info screen — only when a second HDMI output (HDMI-A-2) is actually
 # connected. Spawning it unconditionally would land the fullscreen window on a
