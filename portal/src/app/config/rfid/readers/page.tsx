@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type OutputMethod = "api" | "mqtt" | "disable";
 
@@ -102,6 +102,7 @@ export default function RFIDReadersPage() {
   const [editTarget, setEditTarget] = useState<Reader | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Reader | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<Reader | null>(null);
+  const [endpointTarget, setEndpointTarget] = useState<Reader | null>(null);
   const [banner, setBanner] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [refreshBusy, setRefreshBusy] = useState<Record<number, boolean>>({});
   const [controlBusy, setControlBusy] = useState<Record<number, boolean>>({});
@@ -417,6 +418,14 @@ export default function RFIDReadersPage() {
                       />
                       <button
                         type="button"
+                        onClick={() => setEndpointTarget(r)}
+                        className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                        title="Pull / edit / commit the reader's endpoint config"
+                      >
+                        Endpoint
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setEditTarget(r)}
                         className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
                       >
@@ -488,6 +497,201 @@ export default function RFIDReadersPage() {
           onRefresh={() => refreshReaderStatus(detailsTarget)}
         />
       )}
+
+      {endpointTarget && (
+        <EndpointConfigModal
+          reader={endpointTarget}
+          onClose={() => setEndpointTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint config modal — pull / edit (raw JSON) / commit the reader's
+// IoT-Connector endpointConfig (GET+PUT via /local/rfid/readers/{id}/endpoint-config).
+// ---------------------------------------------------------------------------
+
+function EndpointConfigModal({
+  reader,
+  onClose,
+}: {
+  reader: Reader;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [phase, setPhase] = useState<"loading" | "ready" | "saving">("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  type PullResult = { ok: true; ep: unknown } | { ok: false; error: string };
+
+  const fetchEp = useCallback(async (): Promise<PullResult> => {
+    try {
+      const r = await fetch(`/local/rfid/readers/${reader.id}/endpoint-config`, {
+        cache: "no-store",
+      });
+      const b = (await r.json().catch(() => null)) as
+        | { endpoint_config?: unknown; detail?: string }
+        | null;
+      if (!r.ok) {
+        return { ok: false, error: b?.detail ?? `Failed to pull config (HTTP ${r.status}).` };
+      }
+      return { ok: true, ep: b?.endpoint_config ?? null };
+    } catch {
+      return { ok: false, error: "Could not reach the API." };
+    }
+  }, [reader.id]);
+
+  const applyPull = useCallback((res: PullResult) => {
+    if (!res.ok) {
+      setError(res.error);
+      setPhase("ready");
+      return;
+    }
+    if (res.ep == null) setNote("This reader has no endpoint config set yet.");
+    setText(JSON.stringify(res.ep ?? {}, null, 2));
+    setPhase("ready");
+  }, []);
+
+  // Initial pull. Await first so we never setState synchronously in the effect.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const res = await fetchEp();
+      if (active) applyPull(res);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [fetchEp, applyPull]);
+
+  async function rePull() {
+    setPhase("loading");
+    setError(null);
+    setOkMsg(null);
+    setNote(null);
+    applyPull(await fetchEp());
+  }
+
+  async function commit() {
+    setError(null);
+    setOkMsg(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      setError(`Invalid JSON: ${e instanceof Error ? e.message : "parse error"}`);
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      setError("Endpoint config must be a JSON object.");
+      return;
+    }
+    setPhase("saving");
+    try {
+      const r = await fetch(`/local/rfid/readers/${reader.id}/endpoint-config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpointConfig: parsed }),
+      });
+      const b = (await r.json().catch(() => null)) as { detail?: string } | null;
+      if (!r.ok) {
+        setError(b?.detail ?? `Commit failed (HTTP ${r.status}).`);
+        setPhase("ready");
+        return;
+      }
+      setOkMsg("Committed to the reader.");
+      setPhase("ready");
+      applyPull(await fetchEp()); // re-pull to confirm what the reader now reports
+    } catch {
+      setError("Could not reach the API.");
+      setPhase("ready");
+    }
+  }
+
+  const busy = phase !== "ready";
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold">Endpoint Config — {reader.name}</h3>
+            <p className="mt-0.5 font-mono text-xs text-zinc-500">
+              {reader.scheme ?? "http"}://{reader.address}
+              {reader.port ? `:${reader.port}` : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={rePull}
+            disabled={busy}
+            className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+            title="Re-pull the live endpointConfig from the reader"
+          >
+            {phase === "loading" ? "Pulling…" : "Re-pull"}
+          </button>
+        </div>
+
+        <p className="mt-3 text-xs text-zinc-500">
+          The reader&apos;s IoT-Connector <code>endpointConfig</code> (where it ships
+          tag reads). Edit the JSON and commit it back. A bad value can disrupt
+          delivery — re-pull to confirm afterward.
+        </p>
+
+        {note && (
+          <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            {note}
+          </p>
+        )}
+        {error && (
+          <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            {error}
+          </p>
+        )}
+        {okMsg && (
+          <p className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+            {okMsg}
+          </p>
+        )}
+
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+          disabled={busy}
+          className="mt-3 min-h-0 flex-1 resize-none rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-800 disabled:opacity-60"
+          style={{ minHeight: "20rem" }}
+        />
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={commit}
+            disabled={busy}
+            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {phase === "saving" ? "Committing…" : "Commit to reader"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

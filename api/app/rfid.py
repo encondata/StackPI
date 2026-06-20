@@ -581,6 +581,53 @@ def stop_reader_route(reader_id: int) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Reader endpoint config — pull / commit the IoT-Connector endpointConfig
+# (GET /cloud/config → READER-GATEWAY.endpointConfig; PUT /cloud/cloudConfig).
+# Thin wrappers around app.rfid_status (same auth/login lives there).
+# ---------------------------------------------------------------------------
+
+class EndpointConfigRequest(BaseModel):
+    # The endpointConfig subtree (data/control/management). Passed through to
+    # the reader unchanged — its schema is large and reader-specific, so we
+    # don't model every field.
+    endpointConfig: Dict[str, Any]
+
+
+def _endpoint_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate an rfid_status result dict into an HTTP response, mirroring
+    _control_route: 404 not found, 400 no address, 502 reader/network."""
+    if result.get("ok"):
+        return result
+    err = result.get("error") or "unknown error"
+    if err == "reader not found":
+        raise HTTPException(status_code=404, detail=err)
+    if "no address" in err:
+        raise HTTPException(status_code=400, detail=err)
+    raise HTTPException(status_code=502, detail=err)
+
+
+@router.get("/readers/{reader_id}/endpoint-config")
+def get_endpoint_config_route(reader_id: int) -> Dict[str, Any]:
+    """Login → GET /cloud/config → return READER-GATEWAY.endpointConfig
+    as {ok, reader_id, endpoint_config}. endpoint_config is null when the
+    reader has none set."""
+    from app.rfid_status import get_endpoint_config  # noqa: PLC0415
+
+    return _endpoint_result(get_endpoint_config(int(reader_id)))
+
+
+@router.put("/readers/{reader_id}/endpoint-config")
+def put_endpoint_config_route(
+    reader_id: int, body: EndpointConfigRequest
+) -> Dict[str, Any]:
+    """PUT /cloud/cloudConfig with {endpointConfig} to commit the config back
+    to the reader."""
+    from app.rfid_status import put_endpoint_config  # noqa: PLC0415
+
+    return _endpoint_result(put_endpoint_config(int(reader_id), body.endpointConfig))
+
+
+# ---------------------------------------------------------------------------
 # Active reader — drives the kiosk home "RFID Reader" card
 # ---------------------------------------------------------------------------
 #

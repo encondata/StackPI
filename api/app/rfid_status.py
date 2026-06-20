@@ -56,6 +56,9 @@ STATUS_TIMEOUT_SEC = 10.0
 # reader; give them a bit more headroom but don't let one stall the timer.
 ACTION_TIMEOUT_SEC = 15.0
 MODE_TIMEOUT_SEC = 10.0
+# Config get/put move a larger JSON document (the full reader/endpoint config),
+# so allow a touch more headroom than a plain status read.
+CONFIG_TIMEOUT_SEC = 15.0
 
 # Zebra's login response prepends this literal string before the JWT.
 JWT_PREFIX = "JWT Token:"
@@ -432,8 +435,129 @@ def _get_mode(reader: Dict[str, Any], token: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Config (GET /cloud/config, PUT /cloud/cloudConfig)
+# ---------------------------------------------------------------------------
+
+# Where the IoT-Connector endpoint config lives inside GET /cloud/config.
+_ENDPOINT_CONFIG_PATH = ("READER-GATEWAY", "endpointConfig")
+
+
+def _get_config(reader: Dict[str, Any], token: str) -> Dict[str, Any]:
+    """GET /cloud/config — the full reader configuration (xml + GPIO-LED +
+    READER-GATEWAY, which nests endpointConfig). Raises RuntimeError on failure."""
+    url = f"{_base_url(reader)}/cloud/config"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            verify=False,
+            timeout=CONFIG_TIMEOUT_SEC,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"config transport error: {type(e).__name__}: {e}")
+    if resp.status_code != 200:
+        raise RuntimeError(f"config HTTP {resp.status_code}: {resp.text[:200]}")
+    try:
+        body = resp.json()
+    except ValueError:
+        raise RuntimeError(f"config non-JSON body: {resp.text[:200]}")
+    if not isinstance(body, dict):
+        raise RuntimeError(f"config payload not a JSON object: {type(body).__name__}")
+    return body
+
+
+def _put_cloud_config(
+    reader: Dict[str, Any], token: str, body: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """PUT /cloud/cloudConfig — import an IoT/cloud-connector config. ``body`` is
+    the importCloudConfigReq ({"endpointConfig": {...}}), passed through
+    unchanged. Returns parsed JSON (or None on empty); raises on non-2xx."""
+    url = f"{_base_url(reader)}/cloud/cloudConfig"
+    try:
+        resp = requests.put(
+            url,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            verify=False,
+            timeout=CONFIG_TIMEOUT_SEC,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"cloudConfig transport error: {type(e).__name__}: {e}")
+    if resp.status_code != 200:
+        raise RuntimeError(f"cloudConfig HTTP {resp.status_code}: {resp.text[:200]}")
+    if not resp.content:
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+def _extract_endpoint_config(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pull READER-GATEWAY.endpointConfig out of a /cloud/config response.
+    Returns None when the reader has no endpoint config set."""
+    node: Any = config
+    for key in _ENDPOINT_CONFIG_PATH:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node if isinstance(node, dict) else None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def get_endpoint_config(reader_id: int) -> Dict[str, Any]:
+    """Login → GET /cloud/config → return READER-GATEWAY.endpointConfig.
+
+    Returns:
+      {"ok": True,  "reader_id": int, "endpoint_config": {...} | None}
+      {"ok": False, "reader_id": int, "error": "<short>"}
+    Never raises.
+    """
+    rid = int(reader_id)
+    reader = _get_reader_row(rid)
+    if reader is None:
+        return {"ok": False, "reader_id": rid, "error": "reader not found"}
+    if not (reader.get("address") or "").strip():
+        return {"ok": False, "reader_id": rid, "error": "reader has no address"}
+    try:
+        token = _login(reader)
+        config = _get_config(reader, token)
+    except RuntimeError as e:
+        return {"ok": False, "reader_id": rid, "error": str(e)}
+    return {
+        "ok": True,
+        "reader_id": rid,
+        "endpoint_config": _extract_endpoint_config(config),
+    }
+
+
+def put_endpoint_config(
+    reader_id: int, endpoint_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Login → PUT /cloud/cloudConfig with {"endpointConfig": endpoint_config}.
+
+    Returns {"ok": True, "reader_id": int} or
+            {"ok": False, "reader_id": int, "error": "<short>"}. Never raises.
+    """
+    rid = int(reader_id)
+    reader = _get_reader_row(rid)
+    if reader is None:
+        return {"ok": False, "reader_id": rid, "error": "reader not found"}
+    if not (reader.get("address") or "").strip():
+        return {"ok": False, "reader_id": rid, "error": "reader has no address"}
+    try:
+        token = _login(reader)
+        _put_cloud_config(reader, token, {"endpointConfig": endpoint_config})
+    except RuntimeError as e:
+        return {"ok": False, "reader_id": rid, "error": str(e)}
+    return {"ok": True, "reader_id": rid}
+
 
 def poll_one_reader(reader_id: int) -> Dict[str, Any]:
     """Run one full cycle for a single reader: login → /cloud/status → save.
