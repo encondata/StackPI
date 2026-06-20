@@ -52,17 +52,19 @@ if swaymsg -t get_outputs 2>/dev/null | grep -q "HDMI-A-2"; then
     http://localhost/screens/info2 &
 fi
 
-# Keep the PITFT (config) window fullscreen. When an info window maps it first
-# appears on the touchscreen's focused workspace and sway drops the config
-# window out of fullscreen before the info window moves to its own (HDMI)
-# output — leaving the touchscreen showing chromium's toolbar. The for_window
-# rule already fullscreened config, but that ran before the info window mapped,
-# so re-assert it for a few seconds until every window has settled. `fullscreen
-# enable` is idempotent, so the repeats are no-ops once it sticks.
+# Keep the PITFT (config) window fullscreen for the life of the session. The
+# for_window rule fullscreens it, but a new window (the HDMI info screen) maps on
+# the touchscreen's focused workspace and sway drops config out of fullscreen
+# before that window moves to its own output — leaving the touchscreen showing
+# chromium's toolbar. The timing is unpredictable (at cold boot chromium maps
+# long after launch), so rather than re-assert for a fixed window, subscribe to
+# sway's window events and re-fullscreen config whenever something changes.
+# `fullscreen enable` is idempotent: a no-op when config is already fullscreen,
+# so asserting it doesn't trigger an event and loop on itself.
 (
-  for _ in $(seq 1 8); do
+  swaymsg '[app_id="stackpi-config"] fullscreen enable' >/dev/null 2>&1 || true
+  swaymsg -t subscribe -m '["window"]' 2>/dev/null | while read -r _event; do
     swaymsg '[app_id="stackpi-config"] fullscreen enable' >/dev/null 2>&1 || true
-    sleep 1
   done
 ) &
 
