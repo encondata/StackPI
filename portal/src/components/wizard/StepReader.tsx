@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { EthernetPort, Plus, RotateCw, Check } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { EthernetPort, Plus, RotateCw, Check, Loader2 } from "lucide-react";
 import { OnScreenKeyboard } from "@/components/OnScreenKeyboard";
 import { LoadingOverlay } from "@/components/LoadingOverlay";
 import type { StepProps } from "./InitialSetupWizard";
@@ -18,30 +18,62 @@ function isOnline(r: Reader): boolean {
   return !r.last_error && r.last_status != null;
 }
 
+// Where the reader's IoT-Connector ships tag reads. Initial setup ensures the
+// selected reader's data endpoint points back at this Pi.
+const API_PORT = 8000;
+const INGEST_PATH = "/rfid-tags";
+
+type EpConfig = {
+  data?: { event?: { connections?: Array<{ type?: string; options?: { URL?: string } }> } };
+};
+
+function httpPostUrl(ep: EpConfig | null | undefined): string | null {
+  const conns = ep?.data?.event?.connections;
+  if (!Array.isArray(conns)) return null;
+  return conns.find((x) => x?.type === "httpPost")?.options?.URL ?? null;
+}
+
+type EpPhase = "idle" | "checking" | "setting" | "verifying" | "verified" | "error";
+
 export function StepReader({ state, update }: StepProps) {
   const [readers, setReaders] = useState<Reader[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [epPhase, setEpPhase] = useState<EpPhase>(
+    state.readerName && state.endpointVerified ? "verified" : "idle"
+  );
+  const [epMsg, setEpMsg] = useState<string | null>(null);
+  const [epUrl, setEpUrl] = useState<string | null>(null);
+  const mounted = useRef(true);
 
-  async function load() {
+  useEffect(() => {
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  async function load(): Promise<Reader[]> {
     try {
       const r = await fetch("/local/rfid/readers", { cache: "no-store" });
       if (r.ok) {
         const d = (await r.json()) as { readers?: Reader[] };
-        setReaders(d.readers ?? []);
+        const list = d.readers ?? [];
+        setReaders(list);
+        return list;
       }
     } catch {
       /* keep last */
     }
+    return readers;
   }
 
-  async function refresh() {
+  async function refresh(): Promise<Reader[]> {
     setLoading(true);
     try {
       await fetch("/local/rfid/readers/poll-status", { method: "POST" });
-      await load();
+      return await load();
     } catch {
-      /* keep last */
+      return readers;
     } finally {
       setLoading(false);
     }
@@ -52,9 +84,104 @@ export function StepReader({ state, update }: StepProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // --- endpoint check / set / verify ---------------------------------------
+
+  async function piUrl(): Promise<string | null> {
+    try {
+      const r = await fetch("/local/settings", { cache: "no-store" });
+      if (!r.ok) return null;
+      const d = (await r.json()) as { connections?: Array<{ type?: string; ip4?: string }> };
+      const conn = (d.connections ?? []).find((c) => c?.type !== "loopback" && c?.ip4);
+      return conn?.ip4 ? `http://${conn.ip4}:${API_PORT}${INGEST_PATH}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function getEndpoint(id: number): Promise<{ ep?: EpConfig | null; error?: string }> {
+    try {
+      const r = await fetch(`/local/rfid/readers/${id}/endpoint-config`, { cache: "no-store" });
+      const b = (await r.json().catch(() => null)) as
+        | { endpoint_config?: EpConfig | null; detail?: string }
+        | null;
+      if (!r.ok) return { error: b?.detail ?? `HTTP ${r.status}` };
+      return { ep: b?.endpoint_config ?? null };
+    } catch {
+      return { error: "Could not reach the API." };
+    }
+  }
+
+  async function putEndpointUrl(id: number, url: string): Promise<{ error?: string }> {
+    try {
+      const r = await fetch(`/local/rfid/readers/${id}/endpoint-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (r.ok) return {};
+      const b = (await r.json().catch(() => null)) as { detail?: string } | null;
+      return { error: b?.detail ?? `HTTP ${r.status}` };
+    } catch {
+      return { error: "Could not reach the API." };
+    }
+  }
+
+  // Check the reader's current endpoint, set it to this Pi if it differs, then
+  // re-read to verify. Sets endpointVerified (gates the wizard's Next) on
+  // success; any failure leaves it false and shows the error + a Retry.
+  async function pointAtPi(reader: Reader) {
+    setEpMsg(null);
+    setEpPhase("checking");
+    const url = await piUrl();
+    if (!mounted.current) return;
+    if (!url) {
+      setEpPhase("error");
+      setEpMsg("Couldn’t determine this Pi’s IP address.");
+      return;
+    }
+    setEpUrl(url);
+
+    const cur = await getEndpoint(reader.id);
+    if (!mounted.current) return;
+    if (cur.error) {
+      setEpPhase("error");
+      setEpMsg(cur.error);
+      return;
+    }
+
+    if (httpPostUrl(cur.ep) !== url) {
+      setEpPhase("setting");
+      const res = await putEndpointUrl(reader.id, url);
+      if (!mounted.current) return;
+      if (res.error) {
+        setEpPhase("error");
+        setEpMsg(res.error);
+        return;
+      }
+      setEpPhase("verifying");
+      const after = await getEndpoint(reader.id);
+      if (!mounted.current) return;
+      if (after.error) {
+        setEpPhase("error");
+        setEpMsg(after.error);
+        return;
+      }
+      if (httpPostUrl(after.ep) !== url) {
+        setEpPhase("error");
+        setEpMsg("Reader didn’t report the new endpoint after setting.");
+        return;
+      }
+    }
+
+    setEpPhase("verified");
+    update({ endpointVerified: true });
+  }
+
   function select(r: Reader) {
     if (!isOnline(r)) return;
-    update({ readerName: r.name });
+    update({ readerName: r.name, endpointVerified: false });
+    setEpUrl(null);
+    pointAtPi(r);
   }
 
   return (
@@ -126,13 +253,65 @@ export function StepReader({ state, update }: StepProps) {
         </button>
       </div>
 
+      {state.readerName && epPhase !== "idle" && (
+        <div
+          className={
+            "flex-none rounded-xl border px-4 py-3 text-sm " +
+            (epPhase === "verified"
+              ? "border-green-700 bg-green-950/40 text-green-300"
+              : epPhase === "error"
+                ? "border-red-700 bg-red-950/40 text-red-300"
+                : "border-zinc-700 bg-zinc-900 text-zinc-300")
+          }
+        >
+          {epPhase === "checking" && (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Checking reader endpoint…
+            </span>
+          )}
+          {epPhase === "setting" && (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Pointing reader at this Pi…
+            </span>
+          )}
+          {epPhase === "verifying" && (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Verifying…
+            </span>
+          )}
+          {epPhase === "verified" && (
+            <span>
+              ✓ Reader endpoint points at this Pi
+              {epUrl ? ` — ${epUrl}` : ""}.
+            </span>
+          )}
+          {epPhase === "error" && (
+            <div className="flex items-center justify-between gap-3">
+              <span>✗ Couldn’t set the reader endpoint: {epMsg}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const r = readers.find((x) => x.name === state.readerName);
+                  if (r) pointAtPi(r);
+                }}
+                className="shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs text-zinc-200"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {adding && (
         <AddReaderPanel
           onClose={() => setAdding(false)}
           onAdded={async (name) => {
             setAdding(false);
-            await refresh();
-            update({ readerName: name });
+            const list = await refresh();
+            const r = list.find((x) => x.name === name);
+            if (r && isOnline(r)) select(r);
+            else update({ readerName: name, endpointVerified: false });
           }}
         />
       )}

@@ -15,6 +15,9 @@ export type WizardState = {
   moveId: number | null;
   moveName: string | null;
   readerName: string | null;
+  // True once the selected reader's endpoint has been verified pointing at this
+  // Pi (set by StepReader). Gates Step 2's Next.
+  endpointVerified: boolean;
   siteId: number | null;
   siteName: string | null;
   scanTypeId: number | null;
@@ -36,6 +39,7 @@ export function InitialSetupWizard() {
     moveId: null,
     moveName: null,
     readerName: null,
+    endpointVerified: false,
     siteId: null,
     siteName: null,
     scanTypeId: null,
@@ -49,7 +53,7 @@ export function InitialSetupWizard() {
     step === 1
       ? state.moveId != null
       : step === 2
-        ? state.readerName != null
+        ? state.readerName != null && state.endpointVerified
         : state.siteId != null && state.scanTypeId != null;
 
   function goPrev() {
