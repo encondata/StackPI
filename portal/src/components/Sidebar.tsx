@@ -91,6 +91,7 @@ function buildMenu(pgwebHost: string): MenuItem[] {
         { title: "Hardware", href: "/config/settings/hardware" },
         { title: "Screen Settings", href: "/config/settings/screen-settings" },
         { title: "Status Screen", href: "/config/settings/screen-status" },
+        { title: "Software Update", href: "/config/settings/update" },
       ],
     },
     { title: "Logs", href: "/config/logs", icon: FileText, color: "#52c41a" },
