@@ -14,11 +14,13 @@ progress by reading the state/log files the updater writes to /run/stackpi.
 No auth — same LAN-trust posture as the rest of /local/*.
 """
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +35,15 @@ UPDATE_UNIT = "stackpi-update.service"
 STATE_FILE = Path("/run/stackpi/update.state")
 LOG_FILE = Path("/run/stackpi/update.log")
 
-BRANCH = "main"
+DEFAULT_BRANCH = "main"
 LOG_TAIL_LINES = 200
+COMMITS_LIMIT_DEFAULT = 20
+COMMITS_LIMIT_MAX = 100
+
+# Branch names and commit refs reach `git checkout`/`reset` in the privileged
+# updater, so reject anything with shell/ref metacharacters (allow only safe
+# git-ref characters).
+_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
 
 GIT_TIMEOUT_SEC = 10
 FETCH_TIMEOUT_SEC = 20
@@ -65,15 +74,69 @@ def _git(args: List[str], timeout: int = GIT_TIMEOUT_SEC) -> str:
 
 
 def _fetch() -> bool:
-    """Best-effort `git fetch` of the tracked branch so the 'latest' SHA is
-    fresh. Returns False (rather than raising) when offline — we then compare
-    against the last-known origin ref."""
+    """Best-effort `git fetch` of all branches so the branch/commit lists and
+    'latest' SHAs are fresh. Returns False (rather than raising) when offline —
+    we then work from the last-known origin refs."""
     try:
-        _git(["fetch", "--quiet", "origin", BRANCH], timeout=FETCH_TIMEOUT_SEC)
+        _git(["fetch", "--quiet", "--prune", "origin"], timeout=FETCH_TIMEOUT_SEC)
         return True
     except RuntimeError as e:
         log.info("update fetch failed (offline?): %s", e)
         return False
+
+
+def _valid_ref(ref: str) -> bool:
+    return bool(_REF_RE.match(ref))
+
+
+def _current_branch() -> str:
+    """The branch the device is on (detached HEAD → DEFAULT_BRANCH)."""
+    try:
+        b = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+        return b if b and b != "HEAD" else DEFAULT_BRANCH
+    except RuntimeError:
+        return DEFAULT_BRANCH
+
+
+def _list_branches() -> List[str]:
+    """Remote branch short names (origin/* minus the symbolic HEAD)."""
+    try:
+        out = _git(
+            ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"]
+        )
+    except RuntimeError:
+        return []
+    names = []
+    for line in out.splitlines():
+        name = line.strip()
+        if not name or name.endswith("/HEAD"):
+            continue
+        names.append(name[len("origin/"):] if name.startswith("origin/") else name)
+    return sorted(set(names))
+
+
+def _list_commits(branch: str, limit: int) -> List[dict]:
+    """Recent commits on origin/<branch>, newest first. \\x1f-separated fields
+    avoid clashing with anything in a commit subject."""
+    try:
+        out = _git(
+            [
+                "log",
+                f"origin/{branch}",
+                f"-n{int(limit)}",
+                "--format=%H%x1f%h%x1f%cI%x1f%s",
+            ]
+        )
+    except RuntimeError:
+        return []
+    commits = []
+    for line in out.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) == 4:
+            commits.append(
+                {"sha": parts[0], "short": parts[1], "date": parts[2], "subject": parts[3]}
+            )
+    return commits
 
 
 def _run_state() -> str:
@@ -120,13 +183,19 @@ def _log_tail(lines: int = LOG_TAIL_LINES) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-def _trigger_update() -> None:
-    """Invoke the privileged updater's `start` mode. Returns immediately —
-    the updater detaches into its own systemd unit. Raises RuntimeError on
-    any failure to launch."""
+def _trigger_update(branch: Optional[str] = None, commit: Optional[str] = None) -> None:
+    """Invoke the privileged updater's `start` mode, optionally targeting a
+    specific branch (and commit on it). Returns immediately — the updater
+    detaches into its own systemd unit. Raises RuntimeError on any failure to
+    launch."""
+    cmd = ["sudo", "-n", UPDATER, "start"]
+    if branch:
+        cmd.append(branch)
+        if commit:
+            cmd.append(commit)
     try:
         proc = subprocess.run(
-            ["sudo", "-n", UPDATER, "start"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=START_TIMEOUT_SEC,
@@ -145,49 +214,97 @@ def _trigger_update() -> None:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/branches")
+def update_branches() -> dict:
+    """All remote branches + the branch the device is currently on."""
+    fetch_ok = _fetch()
+    return {
+        "current_branch": _current_branch(),
+        "branches": _list_branches(),
+        "fetch_ok": fetch_ok,
+    }
+
+
+@router.get("/commits")
+def update_commits(
+    branch: str = Query(..., max_length=100),
+    limit: int = Query(COMMITS_LIMIT_DEFAULT, ge=1, le=COMMITS_LIMIT_MAX),
+) -> dict:
+    """Recent commits on origin/<branch>, newest first (the first is the tip)."""
+    if not _valid_ref(branch):
+        raise HTTPException(status_code=400, detail="invalid branch name")
+    _fetch()
+    return {"branch": branch, "commits": _list_commits(branch, limit)}
+
+
 @router.get("/status")
-def update_status() -> dict:
-    """Report the installed revision, the latest available on the tracked
-    branch, and any in-progress run."""
+def update_status(
+    branch: Optional[str] = Query(None, max_length=100),
+    commit: Optional[str] = Query(None, max_length=100),
+) -> dict:
+    """Report the installed revision vs. a target (branch tip, or a specific
+    commit), and any in-progress run. With no params, the target is the current
+    branch's tip — so the touchscreen panel keeps working unchanged."""
+    if branch is not None and not _valid_ref(branch):
+        raise HTTPException(status_code=400, detail="invalid branch name")
+    if commit is not None and not _valid_ref(commit):
+        raise HTTPException(status_code=400, detail="invalid commit")
+
     try:
         current = _git(["rev-parse", "HEAD"])
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+    current_branch = _current_branch()
+    branch = branch or current_branch
 
     fetch_ok = _fetch()
 
-    latest: Optional[str] = None
+    target: Optional[str] = None
     behind = 0
     try:
-        latest = _git(["rev-parse", f"origin/{BRANCH}"])
-        behind = int(_git(["rev-list", "--count", f"HEAD..origin/{BRANCH}"]))
+        target = commit if commit else _git(["rev-parse", f"origin/{branch}"])
+        # How far HEAD is behind the target (0 when the target is same/older).
+        behind = int(_git(["rev-list", "--count", f"HEAD..{target}"]))
     except (RuntimeError, ValueError) as e:
-        # No upstream ref yet (never fetched) — treat as "unknown latest".
-        log.info("update latest-ref lookup failed: %s", e)
+        log.info("update target lookup failed: %s", e)
 
     return {
-        "branch": BRANCH,
+        "branch": branch,
+        "current_branch": current_branch,
         "current": current,
         "current_short": current[:7],
-        "latest": latest,
-        "latest_short": latest[:7] if latest else None,
+        "target": target,
+        "target_short": target[:7] if target else None,
+        "latest_short": target[:7] if target else None,  # touchscreen-panel compat
         "behind": behind,
-        "update_available": behind > 0,
+        "update_available": bool(target and target != current),
         "fetch_ok": fetch_ok,
         "state": _effective_state(),
         "log_tail": _log_tail(),
     }
 
 
+class UpdateStartRequest(BaseModel):
+    branch: Optional[str] = Field(default=None, max_length=100)
+    commit: Optional[str] = Field(default=None, max_length=100)
+
+
 @router.post("/start")
-def update_start() -> dict:
-    """Kick off an update. Idempotent while one is genuinely running (judged by
-    the live systemd unit, not the state file, so a stale state can't lock out
-    retries)."""
+def update_start(body: Optional[UpdateStartRequest] = None) -> dict:
+    """Kick off an update — optionally to a specific branch/commit. Idempotent
+    while one is genuinely running (judged by the live systemd unit, so a stale
+    state can't lock out retries). No body = update the current branch's tip."""
+    branch = body.branch if body else None
+    commit = body.commit if body else None
+    if branch is not None and not _valid_ref(branch):
+        raise HTTPException(status_code=400, detail="invalid branch name")
+    if commit is not None and not _valid_ref(commit):
+        raise HTTPException(status_code=400, detail="invalid commit")
+
     if _unit_active():
         return {"ok": True, "started": False, "already_running": True, "state": "running"}
     try:
-        _trigger_update()
+        _trigger_update(branch, commit)
     except RuntimeError as e:
         log.exception("update start failed")
         raise HTTPException(status_code=500, detail=str(e))

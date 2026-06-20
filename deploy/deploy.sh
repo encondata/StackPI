@@ -44,6 +44,18 @@ fi
 cd "$REPO_DIR"
 if [[ "${SKIP_GIT_PULL:-0}" == "1" ]]; then
   info "Skipping git pull (SKIP_GIT_PULL=1)"
+elif [[ -n "${TARGET_BRANCH:-}" ]]; then
+  # Targeted deploy (in-app updater's branch/commit picker): switch to the
+  # requested branch and hard-reset to the chosen commit (or the branch tip).
+  # reset --hard discards local tracked changes — fine for a deploy target
+  # (build artifacts are gitignored), and it's the only way to switch across
+  # diverged branches (a plain ff-only pull can't).
+  target="${TARGET_COMMIT:-origin/$TARGET_BRANCH}"
+  info "Deploying branch '$TARGET_BRANCH' @ ${TARGET_COMMIT:-tip}"
+  asuser git fetch --prune origin "$TARGET_BRANCH"
+  asuser git checkout -f -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
+  asuser git reset --hard "$target"
+  ok "Checked out $TARGET_BRANCH @ $(asuser git rev-parse --short HEAD)"
 else
   info "Pulling latest code"
   asuser git pull --ff-only

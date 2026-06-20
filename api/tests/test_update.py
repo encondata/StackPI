@@ -21,6 +21,7 @@ def _patch_git(monkeypatch, *, head, origin, behind, fetch_ok=True):
 
     monkeypatch.setattr(update_mod, "_git", fake_git)
     monkeypatch.setattr(update_mod, "_fetch", lambda: fetch_ok)
+    monkeypatch.setattr(update_mod, "_current_branch", lambda: "main")
 
 
 def test_status_update_available(monkeypatch) -> None:
@@ -73,21 +74,21 @@ def test_status_git_error_is_500(monkeypatch) -> None:
 # --- /start ----------------------------------------------------------------
 
 def test_start_triggers_updater(monkeypatch) -> None:
-    calls = {"n": 0}
+    calls = {"args": None}
     monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
-    monkeypatch.setattr(update_mod, "_trigger_update", lambda: calls.__setitem__("n", calls["n"] + 1))
+    monkeypatch.setattr(update_mod, "_trigger_update", lambda b=None, c=None: calls.__setitem__("args", (b, c)))
 
     r = client.post("/local/update/start")
     assert r.status_code == 200
     assert r.json() == {"ok": True, "started": True, "state": "running"}
-    assert calls["n"] == 1
+    assert calls["args"] == (None, None)  # no body → current branch tip
 
 
 def test_start_is_idempotent_while_unit_active(monkeypatch) -> None:
     triggered = {"n": 0}
     # The live systemd unit — not the state file — is the lock.
     monkeypatch.setattr(update_mod, "_unit_active", lambda: True)
-    monkeypatch.setattr(update_mod, "_trigger_update", lambda: triggered.__setitem__("n", triggered["n"] + 1))
+    monkeypatch.setattr(update_mod, "_trigger_update", lambda b=None, c=None: triggered.__setitem__("n", triggered["n"] + 1))
 
     body = client.post("/local/update/start").json()
     assert body["already_running"] is True
@@ -101,7 +102,7 @@ def test_start_not_blocked_by_stale_running_state(monkeypatch) -> None:
     triggered = {"n": 0}
     monkeypatch.setattr(update_mod, "_run_state", lambda: "running")
     monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
-    monkeypatch.setattr(update_mod, "_trigger_update", lambda: triggered.__setitem__("n", triggered["n"] + 1))
+    monkeypatch.setattr(update_mod, "_trigger_update", lambda b=None, c=None: triggered.__setitem__("n", triggered["n"] + 1))
 
     body = client.post("/local/update/start").json()
     assert body["started"] is True
@@ -109,7 +110,7 @@ def test_start_not_blocked_by_stale_running_state(monkeypatch) -> None:
 
 
 def test_start_surfaces_trigger_failure(monkeypatch) -> None:
-    def boom() -> None:
+    def boom(b=None, c=None) -> None:
         raise RuntimeError("sudo: a password is required")
 
     monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
@@ -117,6 +118,72 @@ def test_start_surfaces_trigger_failure(monkeypatch) -> None:
 
     r = client.post("/local/update/start")
     assert r.status_code == 500
+
+
+# --- branch / commit selection ---------------------------------------------
+
+def test_start_with_branch_and_commit(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
+    monkeypatch.setattr(
+        update_mod, "_trigger_update",
+        lambda b=None, c=None: captured.update(branch=b, commit=c),
+    )
+    r = client.post("/local/update/start", json={"branch": "dev", "commit": "abcdef1"})
+    assert r.status_code == 200
+    assert captured == {"branch": "dev", "commit": "abcdef1"}
+
+
+def test_start_rejects_bad_branch(monkeypatch) -> None:
+    triggered = {"n": 0}
+    monkeypatch.setattr(update_mod, "_unit_active", lambda: False)
+    monkeypatch.setattr(update_mod, "_trigger_update", lambda b=None, c=None: triggered.__setitem__("n", 1))
+    r = client.post("/local/update/start", json={"branch": "dev; rm -rf /"})
+    assert r.status_code == 400
+    assert triggered["n"] == 0  # never launched
+
+
+def test_branches_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(update_mod, "_fetch", lambda: True)
+    monkeypatch.setattr(update_mod, "_current_branch", lambda: "dev")
+    monkeypatch.setattr(update_mod, "_list_branches", lambda: ["dev", "main"])
+    body = client.get("/local/update/branches").json()
+    assert body == {"current_branch": "dev", "branches": ["dev", "main"], "fetch_ok": True}
+
+
+def test_commits_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(update_mod, "_fetch", lambda: True)
+    sample = [{"sha": "a" * 40, "short": "aaaaaaa", "date": "2026-06-20T00:00:00Z", "subject": "tip"}]
+    monkeypatch.setattr(update_mod, "_list_commits", lambda branch, limit: sample)
+    body = client.get("/local/update/commits?branch=dev").json()
+    assert body == {"branch": "dev", "commits": sample}
+
+
+def test_commits_rejects_bad_branch() -> None:
+    assert client.get("/local/update/commits?branch=bad;evil").status_code == 400
+
+
+def test_status_with_explicit_commit(monkeypatch) -> None:
+    head = "a" * 40
+    commit = "c" * 40
+
+    def fake_git(args, timeout=update_mod.GIT_TIMEOUT_SEC):
+        if args[:2] == ["rev-parse", "HEAD"]:
+            return head
+        if args[:1] == ["rev-list"]:
+            return "5"
+        raise AssertionError(f"unexpected git args: {args}")
+
+    monkeypatch.setattr(update_mod, "_git", fake_git)
+    monkeypatch.setattr(update_mod, "_fetch", lambda: True)
+    monkeypatch.setattr(update_mod, "_current_branch", lambda: "main")
+    monkeypatch.setattr(update_mod, "_run_state", lambda: "idle")
+    monkeypatch.setattr(update_mod, "_log_tail", lambda *a, **k: "")
+
+    body = client.get(f"/local/update/status?branch=dev&commit={commit}").json()
+    assert body["branch"] == "dev"
+    assert body["target_short"] == "ccccccc"
+    assert body["update_available"] is True  # head != commit
 
 
 # --- state reconciliation --------------------------------------------------

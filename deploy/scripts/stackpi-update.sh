@@ -13,8 +13,12 @@
 # returns immediately and the UI polls the state/log files below.
 #
 # Usage:
-#   stackpi-update.sh start   # kick off an update (returns at once)
-#   stackpi-update.sh run     # the actual work (invoked inside the unit)
+#   stackpi-update.sh start [branch] [commit]   # kick off (returns at once)
+#   stackpi-update.sh run                        # the actual work (in the unit)
+#
+# With no branch, deploy.sh fast-forwards the current branch (original
+# behavior). With a branch (and optional commit), deploy.sh switches to it and
+# hard-resets to that commit (or the branch tip).
 #
 # Env: STACKPI_REPO_DIR (default /home/csg/StackPI_v2)
 
@@ -34,6 +38,18 @@ cmd="${1:-start}"
 case "$cmd" in
   start)
     install -d -m 0755 "$STATE_DIR"
+
+    branch="${2:-}"
+    commit="${3:-}"
+    # Defense in depth: these reach `git checkout`/`reset` in deploy.sh. Allow
+    # only safe git-ref characters (the API validates too).
+    ref_ok() { [[ "$1" =~ ^[A-Za-z0-9._/-]{1,100}$ ]]; }
+    if [[ -n "$branch" ]] && ! ref_ok "$branch"; then
+      echo "invalid branch: $branch" >&2; exit 2
+    fi
+    if [[ -n "$commit" ]] && ! ref_ok "$commit"; then
+      echo "invalid commit: $commit" >&2; exit 2
+    fi
 
     # Refuse to stack updates. --collect cleans the unit up when it finishes,
     # so an idle/finished prior run won't block a new one.
@@ -58,6 +74,8 @@ case "$cmd" in
       --unit="$UNIT" \
       --collect \
       --setenv=STACKPI_REPO_DIR="$REPO_DIR" \
+      --setenv=STACKPI_BRANCH="$branch" \
+      --setenv=STACKPI_COMMIT="$commit" \
       /bin/bash "$RUN_COPY" run
     echo "update started"
     ;;
@@ -70,7 +88,9 @@ case "$cmd" in
     {
       echo ">>> StackPI update starting $(date -Is)"
       echo ">>> repo: $REPO_DIR"
-      if bash "$REPO_DIR/deploy/deploy.sh"; then
+      echo ">>> target branch: ${STACKPI_BRANCH:-<current>}  commit: ${STACKPI_COMMIT:-<tip>}"
+      if TARGET_BRANCH="${STACKPI_BRANCH:-}" TARGET_COMMIT="${STACKPI_COMMIT:-}" \
+          bash "$REPO_DIR/deploy/deploy.sh"; then
         echo ">>> deploy.sh succeeded"
         echo success > "$STATE_FILE"; chmod 0644 "$STATE_FILE"
         echo ">>> update complete — rebooting"
