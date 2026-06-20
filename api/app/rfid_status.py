@@ -29,6 +29,7 @@ shared-state race conditions. If we later need to amortise the login cost
 across many calls, that becomes a follow-up — for now, one log-in per poll
 is fine at a 5-minute cadence.
 """
+import copy
 import json
 import logging
 import subprocess
@@ -570,6 +571,89 @@ def put_endpoint_config(
     except RuntimeError as e:
         return {"ok": False, "reader_id": rid, "error": str(e)}
     return {"ok": True, "reader_id": rid}
+
+
+# The data connection StackPI creates when a reader has none. Mirrors the shape
+# a reader reports for an httpPost endpoint (verified live on FX9600 3.29.x): a
+# single options.URL plus no-auth security. Only the URL is filled in.
+_STACKPI_HTTP_CONNECTION: Dict[str, Any] = {
+    "type": "httpPost",
+    "name": "StackPI",
+    "description": "Local StackPI",
+    "options": {
+        "URL": "",
+        "security": {
+            "authenticationType": "NONE",
+            "verifyHost": False,
+            "verifyPeer": False,
+            "CACertificateFileLocation": "",
+            "authenticationOptions": {
+                "privateKeyFileLocation": "",
+                "publicKeyFileLocation": "",
+            },
+        },
+    },
+}
+
+
+def _apply_endpoint_url(config: Dict[str, Any], url: str) -> Dict[str, Any]:
+    """Mutate a /cloud/config dict so the tag-data connection points at ``url``.
+
+    Sets data.event's first httpPost connection's options.URL, creating the
+    nesting and a StackPI connection (from the template) if absent. Every other
+    connection and setting is left untouched. Returns the same config."""
+    def _dict_at(parent: Dict[str, Any], key: str) -> Dict[str, Any]:
+        node = parent.get(key)
+        if not isinstance(node, dict):
+            node = {}
+            parent[key] = node
+        return node
+
+    gateway = _dict_at(config, _ENDPOINT_CONFIG_PATH[0])      # READER-GATEWAY
+    endpoint = _dict_at(gateway, _ENDPOINT_CONFIG_PATH[1])    # endpointConfig
+    event = _dict_at(_dict_at(endpoint, "data"), "event")
+    conns = event.get("connections")
+    if not isinstance(conns, list):
+        conns = []
+        event["connections"] = conns
+
+    target = next(
+        (c for c in conns if isinstance(c, dict) and c.get("type") == "httpPost"),
+        None,
+    )
+    if target is None:
+        target = copy.deepcopy(_STACKPI_HTTP_CONNECTION)
+        conns.append(target)
+
+    options = target.get("options")
+    if not isinstance(options, dict):
+        options = {}
+        target["options"] = options
+    options["URL"] = url
+    return config
+
+
+def set_endpoint_url(reader_id: int, url: str) -> Dict[str, Any]:
+    """Point the reader's tag-data connection at ``url`` (e.g. this Pi's
+    /rfid-tags) via read-modify-write on /cloud/config.
+
+    Returns {"ok": True, "reader_id": int, "url": str} or
+            {"ok": False, "reader_id": int, "error": "<short>"}. Never raises.
+    """
+    rid = int(reader_id)
+    reader = _get_reader_row(rid)
+    if reader is None:
+        return {"ok": False, "reader_id": rid, "error": "reader not found"}
+    if not (reader.get("address") or "").strip():
+        return {"ok": False, "reader_id": rid, "error": "reader has no address"}
+    try:
+        token = _login(reader)
+        config = _get_config(reader, token)
+        _apply_endpoint_url(config, url)
+        _put_config(reader, token, config)
+    except RuntimeError as e:
+        return {"ok": False, "reader_id": rid, "error": str(e)}
+    return {"ok": True, "reader_id": rid, "url": url}
 
 
 def poll_one_reader(reader_id: int) -> Dict[str, Any]:

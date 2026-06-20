@@ -620,11 +620,26 @@ def get_endpoint_config_route(reader_id: int) -> Dict[str, Any]:
 def put_endpoint_config_route(
     reader_id: int, body: EndpointConfigRequest
 ) -> Dict[str, Any]:
-    """PUT /cloud/cloudConfig with {endpointConfig} to commit the config back
-    to the reader."""
+    """Commit the endpointConfig back to the reader (read-modify-write on
+    /cloud/config)."""
     from app.rfid_status import put_endpoint_config  # noqa: PLC0415
 
     return _endpoint_result(put_endpoint_config(int(reader_id), body.endpointConfig))
+
+
+class EndpointUrlRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+@router.post("/readers/{reader_id}/endpoint-url")
+def set_endpoint_url_route(
+    reader_id: int, body: EndpointUrlRequest
+) -> Dict[str, Any]:
+    """Point the reader's tag-data connection at the given URL (e.g. this Pi's
+    /rfid-tags), preserving the rest of its config."""
+    from app.rfid_status import set_endpoint_url  # noqa: PLC0415
+
+    return _endpoint_result(set_endpoint_url(int(reader_id), body.url))
 
 
 # ---------------------------------------------------------------------------

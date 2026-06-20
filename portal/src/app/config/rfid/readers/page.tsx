@@ -102,7 +102,6 @@ export default function RFIDReadersPage() {
   const [editTarget, setEditTarget] = useState<Reader | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Reader | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<Reader | null>(null);
-  const [endpointTarget, setEndpointTarget] = useState<Reader | null>(null);
   const [banner, setBanner] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [refreshBusy, setRefreshBusy] = useState<Record<number, boolean>>({});
   const [controlBusy, setControlBusy] = useState<Record<number, boolean>>({});
@@ -272,14 +271,47 @@ export default function RFIDReadersPage() {
         }),
       });
       const body = await res.json().catch(() => null);
-      if (res.ok) {
-        setEditTarget(null);
-        flash("success", `Saved changes to “${form.name}”.`);
-        if (body) setData(body as Payload);
-        else refreshNow();
-      } else {
+      if (!res.ok) {
         flash("error", body?.detail ?? "Failed to save changes.");
+        return;
       }
+      if (body) setData(body as Payload);
+      else refreshNow();
+
+      // When this reader delivers locally over HTTP, point its IoT-Connector
+      // endpoint at the Local URL too. The DB save above already succeeded —
+      // a reader-push failure only downgrades the banner, never blocks the save.
+      let readerOk = true;
+      let readerMsg = "";
+      const localUrl = form.local_url.trim();
+      if (form.local_method === "api" && localUrl) {
+        try {
+          const pr = await fetch(
+            `/local/rfid/readers/${reader.id}/endpoint-url`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: localUrl }),
+            }
+          );
+          if (pr.ok) {
+            readerMsg = " Reader endpoint pointed at the Local URL.";
+          } else {
+            const pb = (await pr.json().catch(() => null)) as { detail?: string } | null;
+            readerOk = false;
+            readerMsg = ` Reader endpoint NOT updated: ${pb?.detail ?? `HTTP ${pr.status}`}.`;
+          }
+        } catch {
+          readerOk = false;
+          readerMsg = " Reader endpoint NOT updated: could not reach the reader.";
+        }
+      }
+
+      setEditTarget(null);
+      flash(
+        readerOk ? "success" : "error",
+        `Saved changes to “${form.name}”.${readerMsg}`
+      );
     } finally {
       setBusyEdit(false);
     }
@@ -418,14 +450,6 @@ export default function RFIDReadersPage() {
                       />
                       <button
                         type="button"
-                        onClick={() => setEndpointTarget(r)}
-                        className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-                        title="Pull / edit / commit the reader's endpoint config"
-                      >
-                        Endpoint
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => setEditTarget(r)}
                         className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
                       >
@@ -497,38 +521,30 @@ export default function RFIDReadersPage() {
           onRefresh={() => refreshReaderStatus(detailsTarget)}
         />
       )}
-
-      {endpointTarget && (
-        <EndpointConfigModal
-          reader={endpointTarget}
-          onClose={() => setEndpointTarget(null)}
-        />
-      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Endpoint config modal — pull / edit (raw JSON) / commit the reader's
-// IoT-Connector endpointConfig (GET+PUT via /local/rfid/readers/{id}/endpoint-config).
+// Reader endpoint config: raw-JSON editor (Edit modal) + key-details (Details).
+// Both read/write via /local/rfid/readers/{id}/endpoint-config.
 // ---------------------------------------------------------------------------
 
-function EndpointConfigModal({
-  reader,
-  onClose,
-}: {
-  reader: Reader;
-  onClose: () => void;
-}) {
+// Advanced editor: pull the reader's live endpointConfig on demand, edit the
+// raw JSON, commit it back. Rendered as a section inside the Edit modal (so it
+// only hits the reader when the operator clicks Pull, not on every Edit-open).
+function EndpointConfigEditor({ reader }: { reader: Reader }) {
   const [text, setText] = useState("");
-  const [phase, setPhase] = useState<"loading" | "ready" | "saving">("loading");
+  const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "saving">("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
-  type PullResult = { ok: true; ep: unknown } | { ok: false; error: string };
-
-  const fetchEp = useCallback(async (): Promise<PullResult> => {
+  async function pull() {
+    setPhase("loading");
+    setError(null);
+    setOkMsg(null);
+    setNote(null);
     try {
       const r = await fetch(`/local/rfid/readers/${reader.id}/endpoint-config`, {
         cache: "no-store",
@@ -537,43 +553,18 @@ function EndpointConfigModal({
         | { endpoint_config?: unknown; detail?: string }
         | null;
       if (!r.ok) {
-        return { ok: false, error: b?.detail ?? `Failed to pull config (HTTP ${r.status}).` };
+        setError(b?.detail ?? `Failed to pull config (HTTP ${r.status}).`);
+        setPhase("idle");
+        return;
       }
-      return { ok: true, ep: b?.endpoint_config ?? null };
-    } catch {
-      return { ok: false, error: "Could not reach the API." };
-    }
-  }, [reader.id]);
-
-  const applyPull = useCallback((res: PullResult) => {
-    if (!res.ok) {
-      setError(res.error);
+      const ep = b?.endpoint_config ?? null;
+      if (ep == null) setNote("This reader has no endpoint config set yet.");
+      setText(JSON.stringify(ep ?? {}, null, 2));
       setPhase("ready");
-      return;
+    } catch {
+      setError("Could not reach the API.");
+      setPhase("idle");
     }
-    if (res.ep == null) setNote("This reader has no endpoint config set yet.");
-    setText(JSON.stringify(res.ep ?? {}, null, 2));
-    setPhase("ready");
-  }, []);
-
-  // Initial pull. Await first so we never setState synchronously in the effect.
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const res = await fetchEp();
-      if (active) applyPull(res);
-    })();
-    return () => {
-      active = false;
-    };
-  }, [fetchEp, applyPull]);
-
-  async function rePull() {
-    setPhase("loading");
-    setError(null);
-    setOkMsg(null);
-    setNote(null);
-    applyPull(await fetchEp());
   }
 
   async function commit() {
@@ -605,93 +596,176 @@ function EndpointConfigModal({
       }
       setOkMsg("Committed to the reader.");
       setPhase("ready");
-      applyPull(await fetchEp()); // re-pull to confirm what the reader now reports
     } catch {
       setError("Could not reach the API.");
       setPhase("ready");
     }
   }
 
-  const busy = phase !== "ready";
+  const busy = phase === "loading" || phase === "saving";
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold">Endpoint Config — {reader.name}</h3>
-            <p className="mt-0.5 font-mono text-xs text-zinc-500">
-              {reader.scheme ?? "http"}://{reader.address}
-              {reader.port ? `:${reader.port}` : ""}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={rePull}
-            disabled={busy}
-            className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
-            title="Re-pull the live endpointConfig from the reader"
-          >
-            {phase === "loading" ? "Pulling…" : "Re-pull"}
-          </button>
+    <div className="sm:col-span-2 mt-1 rounded-md border border-zinc-200 bg-zinc-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Reader endpoint config (raw JSON)
+          </p>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Advanced — pull the reader&apos;s live <code>endpointConfig</code>, edit,
+            and commit it back. A bad value can disrupt delivery.
+          </p>
         </div>
-
-        <p className="mt-3 text-xs text-zinc-500">
-          The reader&apos;s IoT-Connector <code>endpointConfig</code> (where it ships
-          tag reads). Edit the JSON and commit it back. A bad value can disrupt
-          delivery — re-pull to confirm afterward.
-        </p>
-
-        {note && (
-          <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            {note}
-          </p>
-        )}
-        {error && (
-          <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            {error}
-          </p>
-        )}
-        {okMsg && (
-          <p className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
-            {okMsg}
-          </p>
-        )}
-
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          spellCheck={false}
+        <button
+          type="button"
+          onClick={pull}
           disabled={busy}
-          className="mt-3 min-h-0 flex-1 resize-none rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-800 disabled:opacity-60"
-          style={{ minHeight: "20rem" }}
-        />
-
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
-          >
-            Close
-          </button>
-          <button
-            type="button"
-            onClick={commit}
-            disabled={busy}
-            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {phase === "saving" ? "Committing…" : "Commit to reader"}
-          </button>
-        </div>
+          className="whitespace-nowrap rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+        >
+          {phase === "loading" ? "Pulling…" : phase === "idle" ? "Pull config" : "Re-pull"}
+        </button>
       </div>
+
+      {note && (
+        <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          {note}
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {error}
+        </p>
+      )}
+      {okMsg && (
+        <p className="mt-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+          {okMsg}
+        </p>
+      )}
+
+      {phase !== "idle" && (
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            spellCheck={false}
+            disabled={busy}
+            className="mt-2 w-full resize-y rounded-md border border-zinc-300 bg-white p-3 font-mono text-xs text-zinc-800 disabled:opacity-60"
+            style={{ minHeight: "16rem" }}
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={commit}
+              disabled={busy}
+              className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {phase === "saving" ? "Committing…" : "Commit endpoint to reader"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Read-only key details of the reader's endpointConfig data connections, shown
+// in the Details modal. Auto-pulls on open.
+type EpConnection = {
+  name?: string;
+  description?: string;
+  type?: string;
+  options?: {
+    URL?: string;
+    endpoint?: { hostName?: string; port?: number; protocol?: string };
+    security?: { authenticationType?: string };
+  };
+};
+
+function endpointAddress(c: EpConnection): string {
+  if (c.options?.URL) return c.options.URL;
+  const e = c.options?.endpoint;
+  if (e?.hostName) {
+    return `${e.protocol ? `${e.protocol}://` : ""}${e.hostName}${e.port ? `:${e.port}` : ""}`;
+  }
+  return "—";
+}
+
+function EndpointDetails({ reader }: { reader: Reader }) {
+  const [phase, setPhase] = useState<"loading" | "ready">("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [conns, setConns] = useState<EpConnection[]>([]);
+
+  const load = useCallback(async (): Promise<
+    { ok: true; conns: EpConnection[] } | { ok: false; error: string }
+  > => {
+    try {
+      const r = await fetch(`/local/rfid/readers/${reader.id}/endpoint-config`, {
+        cache: "no-store",
+      });
+      const b = (await r.json().catch(() => null)) as
+        | {
+            endpoint_config?: { data?: { event?: { connections?: EpConnection[] } } };
+            detail?: string;
+          }
+        | null;
+      if (!r.ok) return { ok: false, error: b?.detail ?? `HTTP ${r.status}` };
+      const list = b?.endpoint_config?.data?.event?.connections;
+      return { ok: true, conns: Array.isArray(list) ? list : [] };
+    } catch {
+      return { ok: false, error: "Could not reach the API." };
+    }
+  }, [reader.id]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const res = await load();
+      if (!active) return;
+      if (res.ok) setConns(res.conns);
+      else setError(res.error);
+      setPhase("ready");
+    })();
+    return () => {
+      active = false;
+    };
+  }, [load]);
+
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        Endpoint (where the reader ships tag reads)
+      </p>
+      {phase === "loading" ? (
+        <p className="mt-2 text-xs text-zinc-500">Loading endpoint config…</p>
+      ) : error ? (
+        <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          Couldn’t read endpoint config: {error}
+        </p>
+      ) : conns.length === 0 ? (
+        <p className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+          No data connections configured on this reader.
+        </p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {conns.map((c, i) => (
+            <div key={i} className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-zinc-800">
+                  {c.name || `Connection ${i + 1}`}
+                </span>
+                <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-600">
+                  {c.type || "?"}
+                </span>
+              </div>
+              <p className="mt-1 break-all font-mono text-xs text-zinc-700">
+                {endpointAddress(c)}
+              </p>
+              <p className="mt-0.5 text-[11px] text-zinc-500">
+                auth: {c.options?.security?.authenticationType ?? "—"}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -859,6 +933,8 @@ function EditReaderModal({
           </label>
 
           <EventDeliverySection form={form} setForm={setForm} />
+
+          <EndpointConfigEditor reader={reader} />
 
           <div className="sm:col-span-2">
             <Field
@@ -1063,6 +1139,10 @@ function ReaderDetailsModal({
             />
             <Detail label="Notes" value={reader.notes} />
           </dl>
+        </section>
+
+        <section className="mt-4 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+          <EndpointDetails reader={reader} />
         </section>
 
         <div className="mt-5 flex justify-end gap-2">

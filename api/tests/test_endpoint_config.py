@@ -169,7 +169,122 @@ def test_put_route_validation_422() -> None:
 def test_put_route_502_on_reader_error(monkeypatch) -> None:
     monkeypatch.setattr(
         rs, "put_endpoint_config",
-        lambda rid, ep: {"ok": False, "reader_id": rid, "error": "cloudConfig HTTP 500: boom"},
+        lambda rid, ep: {"ok": False, "reader_id": rid, "error": "config HTTP 500: boom"},
     )
     r = client.put("/local/rfid/readers/7/endpoint-config", json={"endpointConfig": SAMPLE_EP})
+    assert r.status_code == 502
+
+
+# --- _apply_endpoint_url (pure mutator) ------------------------------------
+
+URL = "http://10.0.0.9:8000/rfid-tags"
+
+
+def _conns(config):
+    return config["READER-GATEWAY"]["endpointConfig"]["data"]["event"]["connections"]
+
+
+def test_apply_url_updates_existing_httppost() -> None:
+    config = {
+        "xml": "x",
+        "READER-GATEWAY": {
+            "retention": {"throttle": 1},
+            "endpointConfig": {
+                "data": {
+                    "event": {
+                        "connections": [
+                            {"type": "httpPost", "name": "StackPI",
+                             "options": {"URL": "http://old:8000/rfid-tags", "security": {"x": 1}}}
+                        ]
+                    }
+                }
+            },
+        },
+    }
+    rs._apply_endpoint_url(config, URL)
+    conns = _conns(config)
+    assert len(conns) == 1
+    assert conns[0]["options"]["URL"] == URL
+    # untouched siblings preserved
+    assert conns[0]["options"]["security"] == {"x": 1}
+    assert config["xml"] == "x"
+    assert config["READER-GATEWAY"]["retention"] == {"throttle": 1}
+
+
+def test_apply_url_creates_connection_from_template() -> None:
+    config = {"READER-GATEWAY": {"endpointConfig": {"data": {"event": {"connections": []}}}}}
+    rs._apply_endpoint_url(config, URL)
+    conns = _conns(config)
+    assert len(conns) == 1
+    assert conns[0]["type"] == "httpPost"
+    assert conns[0]["name"] == "StackPI"
+    assert conns[0]["options"]["URL"] == URL
+    assert conns[0]["options"]["security"]["authenticationType"] == "NONE"
+
+
+def test_apply_url_builds_nesting_from_empty() -> None:
+    config = {}
+    rs._apply_endpoint_url(config, URL)
+    assert _conns(config)[0]["options"]["URL"] == URL
+
+
+def test_apply_url_preserves_other_connections() -> None:
+    config = {
+        "READER-GATEWAY": {
+            "endpointConfig": {
+                "data": {
+                    "event": {
+                        "connections": [
+                            {"type": "mqtt", "name": "Cloud", "options": {"endpoint": {"hostName": "broker"}}},
+                            {"type": "httpPost", "name": "StackPI", "options": {"URL": "http://old/rfid-tags"}},
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    rs._apply_endpoint_url(config, URL)
+    conns = _conns(config)
+    assert len(conns) == 2
+    assert conns[0]["type"] == "mqtt"  # untouched
+    assert conns[1]["options"]["URL"] == URL
+
+
+# --- set_endpoint_url + route ----------------------------------------------
+
+def test_set_endpoint_url_ok(monkeypatch) -> None:
+    sent = {}
+    monkeypatch.setattr(rs, "_get_reader_row", lambda rid: {"id": rid, "address": "10.0.0.5"})
+    monkeypatch.setattr(rs, "_login", lambda reader: "tok")
+    monkeypatch.setattr(rs, "_get_config", lambda reader, token: {"READER-GATEWAY": {"endpointConfig": {}}})
+    monkeypatch.setattr(rs, "_put_config", lambda reader, token, cfg: sent.update(cfg))
+    out = rs.set_endpoint_url(5, URL)
+    assert out == {"ok": True, "reader_id": 5, "url": URL}
+    assert _conns(sent)[0]["options"]["URL"] == URL
+
+
+def test_set_endpoint_url_route_200(monkeypatch) -> None:
+    captured = {}
+
+    def fake(rid, url):
+        captured["rid"] = rid
+        captured["url"] = url
+        return {"ok": True, "reader_id": rid, "url": url}
+
+    monkeypatch.setattr(rs, "set_endpoint_url", fake)
+    r = client.post("/local/rfid/readers/3/endpoint-url", json={"url": URL})
+    assert r.status_code == 200
+    assert captured == {"rid": 3, "url": URL}
+
+
+def test_set_endpoint_url_route_422_missing_url() -> None:
+    assert client.post("/local/rfid/readers/3/endpoint-url", json={}).status_code == 422
+
+
+def test_set_endpoint_url_route_502(monkeypatch) -> None:
+    monkeypatch.setattr(
+        rs, "set_endpoint_url",
+        lambda rid, url: {"ok": False, "reader_id": rid, "error": "config transport error"},
+    )
+    r = client.post("/local/rfid/readers/3/endpoint-url", json={"url": URL})
     assert r.status_code == 502
