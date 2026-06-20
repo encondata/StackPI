@@ -18,7 +18,11 @@ a reader silently failed to deliver tags).
 
 - **Read:** the endpoint config is nested in `GET /cloud/config` at
   `READER-GATEWAY.endpointConfig`. No dedicated GET — extract that subtree.
-- **Write:** `PUT /cloud/cloudConfig` with body `{ "endpointConfig": { … } }`.
+- **Write:** read-modify-write via `PUT /cloud/config` (GET config → splice
+  `READER-GATEWAY.endpointConfig` → PUT the whole config back). The dedicated
+  `PUT /cloud/cloudConfig` import endpoint does NOT exist on firmware 3.29.x
+  (returns `404 "/cloudConfig is not a valid URI"` — verified on the live
+  reader, `readerApplication 3.29.19.0`); `PUT /cloud/config` returns 200.
 - **endpointConfig shape:**
   `data.event.connections[]` (tag-read data — the one that targets the Pi),
   `control.commandResponse.connections[]`,

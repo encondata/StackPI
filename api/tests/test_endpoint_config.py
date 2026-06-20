@@ -63,25 +63,55 @@ def test_get_endpoint_config_transport_error(monkeypatch) -> None:
 
 # --- put_endpoint_config ----------------------------------------------------
 
-def test_put_endpoint_config_ok(monkeypatch) -> None:
+def test_put_endpoint_config_read_modify_write(monkeypatch) -> None:
+    # Read-modify-write: splice endpointConfig into the live config and PUT the
+    # WHOLE thing back (the reader has no /cloud/cloudConfig on 3.29.x firmware),
+    # preserving every other setting.
+    existing = {
+        "xml": "x",
+        "GPIO-LED": {"a": 1},
+        "READER-GATEWAY": {
+            "retention": {"throttle": 200},
+            "endpointConfig": {"old": True},
+        },
+    }
     sent = {}
     monkeypatch.setattr(rs, "_get_reader_row", lambda rid: {"id": rid, "address": "10.0.0.5"})
     monkeypatch.setattr(rs, "_login", lambda reader: "tok")
-    monkeypatch.setattr(rs, "_put_cloud_config", lambda reader, token, body: sent.update(body))
+    monkeypatch.setattr(rs, "_get_config", lambda reader, token: existing)
+    monkeypatch.setattr(rs, "_put_config", lambda reader, token, cfg: sent.update(cfg))
+
     out = rs.put_endpoint_config(2, SAMPLE_EP)
     assert out == {"ok": True, "reader_id": 2}
-    # Wrapped in the importCloudConfigReq envelope the reader expects.
-    assert sent == {"endpointConfig": SAMPLE_EP}
+    # endpointConfig replaced...
+    assert sent["READER-GATEWAY"]["endpointConfig"] == SAMPLE_EP
+    # ...and everything else preserved.
+    assert sent["xml"] == "x"
+    assert sent["GPIO-LED"] == {"a": 1}
+    assert sent["READER-GATEWAY"]["retention"] == {"throttle": 200}
+
+
+def test_put_endpoint_config_creates_gateway_when_missing(monkeypatch) -> None:
+    sent = {}
+    monkeypatch.setattr(rs, "_get_reader_row", lambda rid: {"id": rid, "address": "10.0.0.5"})
+    monkeypatch.setattr(rs, "_login", lambda reader: "tok")
+    monkeypatch.setattr(rs, "_get_config", lambda reader, token: {"xml": "x"})
+    monkeypatch.setattr(rs, "_put_config", lambda reader, token, cfg: sent.update(cfg))
+
+    out = rs.put_endpoint_config(2, SAMPLE_EP)
+    assert out["ok"] is True
+    assert sent["READER-GATEWAY"]["endpointConfig"] == SAMPLE_EP
 
 
 def test_put_endpoint_config_error(monkeypatch) -> None:
     monkeypatch.setattr(rs, "_get_reader_row", lambda rid: {"id": rid, "address": "10.0.0.5"})
     monkeypatch.setattr(rs, "_login", lambda reader: "tok")
+    monkeypatch.setattr(rs, "_get_config", lambda reader, token: {"READER-GATEWAY": {}})
 
-    def boom(reader, token, body):
-        raise RuntimeError("cloudConfig HTTP 500: boom")
+    def boom(reader, token, cfg):
+        raise RuntimeError("config HTTP 500: boom")
 
-    monkeypatch.setattr(rs, "_put_cloud_config", boom)
+    monkeypatch.setattr(rs, "_put_config", boom)
     out = rs.put_endpoint_config(2, SAMPLE_EP)
     assert out["ok"] is False
     assert "HTTP 500" in out["error"]

@@ -466,17 +466,20 @@ def _get_config(reader: Dict[str, Any], token: str) -> Dict[str, Any]:
     return body
 
 
-def _put_cloud_config(
-    reader: Dict[str, Any], token: str, body: Dict[str, Any]
+def _put_config(
+    reader: Dict[str, Any], token: str, config: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """PUT /cloud/cloudConfig — import an IoT/cloud-connector config. ``body`` is
-    the importCloudConfigReq ({"endpointConfig": {...}}), passed through
-    unchanged. Returns parsed JSON (or None on empty); raises on non-2xx."""
-    url = f"{_base_url(reader)}/cloud/cloudConfig"
+    """PUT /cloud/config — write the full reader configuration (xml + GPIO-LED +
+    READER-GATEWAY) back. This is how endpointConfig is committed: the dedicated
+    /cloud/cloudConfig import endpoint does not exist on FX9600 firmware 3.29.x
+    ("/cloudConfig is not a valid URI"), so we read-modify-write the whole config
+    via /cloud/config (which nests endpointConfig under READER-GATEWAY). Returns
+    parsed JSON (or None on empty); raises on non-2xx."""
+    url = f"{_base_url(reader)}/cloud/config"
     try:
         resp = requests.put(
             url,
-            json=body,
+            json=config,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -485,9 +488,9 @@ def _put_cloud_config(
             timeout=CONFIG_TIMEOUT_SEC,
         )
     except requests.RequestException as e:
-        raise RuntimeError(f"cloudConfig transport error: {type(e).__name__}: {e}")
+        raise RuntimeError(f"config transport error: {type(e).__name__}: {e}")
     if resp.status_code != 200:
-        raise RuntimeError(f"cloudConfig HTTP {resp.status_code}: {resp.text[:200]}")
+        raise RuntimeError(f"config HTTP {resp.status_code}: {resp.text[:200]}")
     if not resp.content:
         return None
     try:
@@ -540,7 +543,11 @@ def get_endpoint_config(reader_id: int) -> Dict[str, Any]:
 def put_endpoint_config(
     reader_id: int, endpoint_config: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Login → PUT /cloud/cloudConfig with {"endpointConfig": endpoint_config}.
+    """Commit a new endpointConfig to the reader via read-modify-write:
+    login → GET /cloud/config → splice endpoint_config into
+    READER-GATEWAY.endpointConfig → PUT /cloud/config (the whole config back,
+    so every other setting is preserved). We write the full config because the
+    dedicated /cloud/cloudConfig import endpoint is absent on 3.29.x firmware.
 
     Returns {"ok": True, "reader_id": int} or
             {"ok": False, "reader_id": int, "error": "<short>"}. Never raises.
@@ -553,7 +560,13 @@ def put_endpoint_config(
         return {"ok": False, "reader_id": rid, "error": "reader has no address"}
     try:
         token = _login(reader)
-        _put_cloud_config(reader, token, {"endpointConfig": endpoint_config})
+        config = _get_config(reader, token)
+        gateway = config.get(_ENDPOINT_CONFIG_PATH[0])
+        if not isinstance(gateway, dict):
+            gateway = {}
+            config[_ENDPOINT_CONFIG_PATH[0]] = gateway
+        gateway[_ENDPOINT_CONFIG_PATH[1]] = endpoint_config
+        _put_config(reader, token, config)
     except RuntimeError as e:
         return {"ok": False, "reader_id": rid, "error": str(e)}
     return {"ok": True, "reader_id": rid}
