@@ -144,6 +144,24 @@ def test_build_snapshot_excludes_uptime(monkeypatch) -> None:
     assert "uptime" not in snap
 
 
+def test_reader_light_state_live_reading(monkeypatch) -> None:
+    # connected per the poll → 'reading' iff a scan arrived recently
+    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "online"})
+    monkeypatch.setattr(sb, "_recent_scan", lambda *a, **k: True)
+    assert sb._reader_light_state() == "reading"   # live scan overrides idle
+    monkeypatch.setattr(sb, "_recent_scan", lambda *a, **k: False)
+    assert sb._reader_light_state() == "online"     # no recent scan → idle (light off)
+    # the poll reporting 'reading' but no live scans → idle (don't trust stale radio)
+    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "reading"})
+    assert sb._reader_light_state() == "online"
+    # faults are independent of scans
+    monkeypatch.setattr(sb, "_recent_scan", lambda *a, **k: True)
+    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "offline"})
+    assert sb._reader_light_state() == "offline"
+    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "degraded"})
+    assert sb._reader_light_state() == "degraded"
+
+
 def test_mark_dirty_noop_without_loop(monkeypatch) -> None:
     monkeypatch.setattr(sb, "_loop", None)
     sb.mark_dirty()  # must not raise

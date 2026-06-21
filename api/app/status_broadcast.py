@@ -261,10 +261,8 @@ async def _run() -> None:
             now = loop.time()
 
             # --- display status broadcast (gated by its own enable) ----------
-            reader_state: Optional[str] = None
             if status_enabled():
                 current = await loop.run_in_executor(None, build_snapshot)
-                reader_state = (current.get("reader") or {}).get("state")
                 group, port = status_target()
                 if last_sent is None or (now - last_keyframe) >= KEYFRAME_SEC:
                     # Keyframe: the full snapshot, so cold-started / lossy
@@ -290,11 +288,11 @@ async def _run() -> None:
                 last_sent = None  # force a fresh keyframe when re-enabled
 
             # --- reader traffic-light → stack light (its own enable) ---------
-            # Independent of the display broadcast: drive the stack light on a
-            # state change, and re-send on the 30s keyframe so a just-powered-on
-            # light re-syncs. Reuse the snapshot's reader state when we have it.
-            if reader_state is None:
-                reader_state = await loop.run_in_executor(None, _active_reader_state)
+            # Independent of the display broadcast and of the display 'reader'
+            # toggle. 'reading' is live (recent scans), so a scan's mark_dirty()
+            # wakeup drives green within ~0.5s; re-send on the 30s keyframe so a
+            # just-powered-on light re-syncs.
+            reader_state = await loop.run_in_executor(None, _reader_light_state)
             reader_kf = (now - last_reader_kf) >= KEYFRAME_SEC
             if reader_state is not None and (reader_state != last_reader_state or reader_kf):
                 await loop.run_in_executor(None, notifier.send_reader_light, reader_state)
@@ -311,15 +309,41 @@ async def _run() -> None:
             await asyncio.sleep(HEARTBEAT_SEC)
 
 
-def _active_reader_state() -> Optional[str]:
-    """The active reader's traffic-light state (offline/degraded/online/reading),
-    or None. Used to drive the stack light independently of the display snapshot."""
+READING_WINDOW_SEC = 8  # a scan within this window ⇒ the reader is "reading"
+
+
+def _recent_scan(window_sec: int = READING_WINDOW_SEC) -> bool:
+    """True if any RFID scan landed within the window — a real-time 'reading'
+    signal (scans hit local_rfid_raw_scans.received_at immediately, unlike the
+    5-minute polled radioActivity). Cheap: indexed on received_at."""
+    try:
+        from app.db import _psql_scalar  # noqa: PLC0415
+        v = _psql_scalar(
+            "SELECT 1 FROM local_rfid_raw_scans "
+            f"WHERE received_at > NOW() - INTERVAL '{int(window_sec)} seconds' LIMIT 1"
+        )
+        return v is not None
+    except Exception:  # pragma: no cover - best effort
+        return False
+
+
+def _reader_light_state() -> Optional[str]:
+    """Reader state for the STACK LIGHT. Connection state (offline/degraded) comes
+    from the reader poll, but 'reading' is driven by live scan arrivals instead of
+    the 5-minute radioActivity — so green tracks truck activity within ~1s and
+    clears shortly after the last tag. Idle-connected ⇒ 'online' (light off)."""
     try:
         from app.rfid import get_active_reader  # noqa: PLC0415
         ar = get_active_reader()
-        return ar.get("state") if isinstance(ar, dict) else None
     except Exception:  # pragma: no cover - best effort
         return None
+    if not isinstance(ar, dict):
+        return None
+    base = ar.get("state")
+    if base in ("offline", "degraded", "unconfigured", None):
+        return base
+    # connected per the poll (online/reading) → override with live scan activity.
+    return "reading" if _recent_scan() else "online"
 
 
 def start() -> "asyncio.Task":

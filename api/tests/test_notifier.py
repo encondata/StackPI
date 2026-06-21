@@ -45,13 +45,12 @@ def test_send_light_respects_enable(monkeypatch) -> None:
 
 
 def test_reader_light_message_mapping() -> None:
-    for state, color in [("offline", "red"), ("degraded", "yellow"),
-                         ("reading", "green"), ("online", "blue")]:
+    for state, color in [("offline", "red"), ("degraded", "yellow"), ("reading", "green")]:
         m = nf.reader_light_message(state)
         assert m.pattern == "solid" and m.color == color and m.brightness == 80
-    # unconfigured / unknown / None → off (solid, brightness 0)
-    assert nf.reader_light_message("unconfigured").brightness == 0
-    assert nf.reader_light_message(None).brightness == 0
+    # idle-connected / unconfigured / unknown → OFF (solid, brightness 0)
+    for state in ("online", "unconfigured", None):
+        assert nf.reader_light_message(state).brightness == 0
 
 
 def test_send_reader_light_gating(monkeypatch) -> None:

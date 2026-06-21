@@ -43,13 +43,14 @@ DEFAULT_PORT = 5005
 DURATION_MAX_MS = 600_000  # 10 min — a sanity ceiling, not a real limit
 
 # Reader traffic-light → stack light. A SOLID light per state (the firmware holds
-# solid indefinitely), colored to match the on-screen reader light. Driven by the
-# status broadcaster on change + the 30s keyframe. unconfigured → off (brightness 0).
+# solid indefinitely), driven by the status broadcaster on change + the 30s
+# keyframe. Only the "on" states are mapped; everything else (online-idle,
+# unconfigured, unknown) → OFF (brightness 0), so the light is dark when nothing
+# is happening and lights up for activity (reading) or faults (degraded/offline).
 READER_LIGHT_BY_STATE = {
-    "offline":  {"pattern": "solid", "color": "red"},
-    "degraded": {"pattern": "solid", "color": "yellow"},
-    "reading":  {"pattern": "solid", "color": "green"},
-    "online":   {"pattern": "solid", "color": "blue"},
+    "offline":  {"pattern": "solid", "color": "red"},     # fault — stays lit
+    "degraded": {"pattern": "solid", "color": "yellow"},   # warning — stays lit
+    "reading":  {"pattern": "solid", "color": "green"},    # actively reading (live)
 }
 READER_LIGHT_BRIGHTNESS = 80
 
@@ -73,8 +74,9 @@ def _reader_light_enabled() -> bool:
 
 
 def reader_light_message(state: Optional[str]) -> "LightMessage":
-    """The solid LightMessage for a reader traffic-light state. Unknown /
-    unconfigured → off (solid, brightness 0) so the stack light clears."""
+    """The solid LightMessage for a reader traffic-light state. States not in the
+    map (online-idle / unconfigured / unknown) → off (solid, brightness 0) so the
+    stack light goes dark."""
     spec = READER_LIGHT_BY_STATE.get(state or "")
     if spec is None:
         return LightMessage(pattern="solid", color="blue", brightness=0, duration=1000, repeat_count=1)
