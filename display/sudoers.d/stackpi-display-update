@@ -1,0 +1,5 @@
+# Allow the StackPI display receiver (running as the kiosk user) to trigger the
+# display updater as root without a password. The updater is the only privileged
+# surface and it lives in root-owned /usr/local/sbin, so the kiosk user cannot
+# modify the script it runs.
+csg ALL=(root) NOPASSWD: /usr/local/sbin/stackpi-display-update.sh

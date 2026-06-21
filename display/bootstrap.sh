@@ -11,7 +11,15 @@ set -euo pipefail
 # Run as the kiosk user 'csg' (has sudo). One-liner:
 #   curl -fsSL https://raw.githubusercontent.com/encondata/StackPI/dev/display/bootstrap.sh | bash
 #
-# Overridable via env: REPO_URL, BRANCH, TARGET_DIR, KIOSK_USER, SKIP_REBOOT=1.
+# Two modes (STACKPI_DISPLAY_MODE):
+#   bootstrap (default) — full provision: packages, build, install, kiosk, reboot.
+#   update              — re-run by the in-app updater (display/update.sh) inside
+#                         a transient unit AS ROOT: skip packages/kiosk-prep,
+#                         honor TARGET_BRANCH/TARGET_COMMIT, restart services
+#                         (no reboot). Build steps drop to the kiosk user.
+#
+# Overridable via env: REPO_URL, BRANCH, TARGET_DIR, KIOSK_USER, SKIP_REBOOT=1,
+#   TARGET_BRANCH, TARGET_COMMIT.
 
 REPO_URL="${REPO_URL:-https://github.com/encondata/StackPI.git}"
 BRANCH="${BRANCH:-dev}"
@@ -19,53 +27,73 @@ TARGET_DIR="${TARGET_DIR:-/home/csg/StackPI_v2}"
 KIOSK_USER="${KIOSK_USER:-csg}"
 APP_DIR="/opt/stackpi-display"
 CFG_DIR="/etc/stackpi-display"
+MODE="${STACKPI_DISPLAY_MODE:-bootstrap}"
 
 info()  { printf '\n\033[1;34m>>> %s\033[0m\n' "$1"; }
 ok()    { printf '\033[1;32m  ✓ %s\033[0m\n' "$1"; }
 warn()  { printf '\033[1;33m  ! %s\033[0m\n' "$1"; }
 fail()  { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; exit 1; }
 
-[[ $EUID -eq 0 ]] && fail "Run as the kiosk user (not root); the script sudo's where needed."
-sudo -v || fail "This user needs sudo."
+# EUID-aware build steps (same approach as the primary's deploy.sh). The updater
+# runs us as root in a transient unit; bootstrap runs us as the kiosk user.
+# `sudo` works in both modes (root runs it without a prompt); only the git/npm
+# steps must drop to the repo owner so .git/node_modules stay user-owned.
+if [[ $EUID -eq 0 ]]; then
+  asuser() { runuser -u "$KIOSK_USER" -- "$@"; }
+else
+  asuser() { "$@"; }
+fi
+
+if [[ "$MODE" == "bootstrap" ]]; then
+  [[ $EUID -eq 0 ]] && fail "Run as the kiosk user (not root); the script sudo's where needed."
+  sudo -v || fail "This user needs sudo."
+fi
 
 # --- 1. packages -----------------------------------------------------------
-info "Installing packages (chromium, sway, git, node for the one-time export build)"
-sudo apt-get update -y
-sudo apt-get install -y git curl ca-certificates chromium sway
+if [[ "$MODE" == "bootstrap" ]]; then
+  info "Installing packages (chromium, sway, git, node for the one-time export build)"
+  sudo apt-get update -y
+  sudo apt-get install -y git curl ca-certificates chromium sway
 
-# Node 20 (NodeSource) — only needed to build the static export once.
-if ! command -v node >/dev/null || [[ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 20 ]]; then
-  info "Installing Node 20 (for the export build)"
-  sudo install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
-  sudo apt-get update -y && sudo apt-get install -y nodejs
+  # Node 20 (NodeSource) — only needed to build the static export once.
+  if ! command -v node >/dev/null || [[ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 20 ]]; then
+    info "Installing Node 20 (for the export build)"
+    sudo install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+    sudo apt-get update -y && sudo apt-get install -y nodejs
+  fi
+  ok "packages installed"
+else
+  info "Update mode — skipping package install"
 fi
-ok "packages installed"
 
 # --- 2. repo ---------------------------------------------------------------
+# Honor an updater-supplied target (branch + optional commit); otherwise track
+# the configured BRANCH tip.
+EFF_BRANCH="${TARGET_BRANCH:-$BRANCH}"
 if [[ -d "$TARGET_DIR/.git" ]]; then
-  info "Updating $TARGET_DIR ($BRANCH)"
-  git -C "$TARGET_DIR" fetch --prune origin "$BRANCH"
-  git -C "$TARGET_DIR" checkout -f -B "$BRANCH" "origin/$BRANCH"
-  git -C "$TARGET_DIR" reset --hard "origin/$BRANCH"
+  info "Updating $TARGET_DIR ($EFF_BRANCH @ ${TARGET_COMMIT:-tip})"
+  asuser git -C "$TARGET_DIR" fetch --prune origin "$EFF_BRANCH"
+  asuser git -C "$TARGET_DIR" checkout -f -B "$EFF_BRANCH" "origin/$EFF_BRANCH"
+  asuser git -C "$TARGET_DIR" reset --hard "${TARGET_COMMIT:-origin/$EFF_BRANCH}"
 else
-  info "Cloning $REPO_URL ($BRANCH)"
-  git clone --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
+  info "Cloning $REPO_URL ($EFF_BRANCH)"
+  asuser git clone --branch "$EFF_BRANCH" "$REPO_URL" "$TARGET_DIR"
 fi
-ok "repo at $TARGET_DIR"
+ok "repo at $TARGET_DIR @ $(asuser git -C "$TARGET_DIR" rev-parse --short HEAD)"
 
 # --- 3. static export of the portal kiosk pages ----------------------------
-info "Building the static export (one-time; slow on a Pi)"
+info "Building the static export (slow on a Pi)"
 cd "$TARGET_DIR/portal"
-npm ci
-STACKPI_DISPLAY_EXPORT=1 npm run build
+asuser npm ci
+asuser env STACKPI_DISPLAY_EXPORT=1 npm run build
 [[ -d out ]] || fail "export did not produce portal/out (check the build log above)"
 sudo install -d -m 0755 "$APP_DIR/web"
 sudo rsync -a --delete out/ "$APP_DIR/web/"
 ok "exported portal → $APP_DIR/web"
 
-# --- 4. receiver + config + units ------------------------------------------
+# --- 4. receiver + config + updater + units --------------------------------
 info "Installing the receiver + config + services"
 sudo install -m 0755 "$TARGET_DIR/display/receiver.py" "$APP_DIR/receiver.py"
 sudo install -m 0644 "$TARGET_DIR/display/setup.html" "$APP_DIR/setup.html"
@@ -75,13 +103,26 @@ if [[ ! -f "$CFG_DIR/config.json" ]]; then
 fi
 # The receiver (runs as the kiosk user) rewrites config.json from the /setup page.
 sudo chown "$KIOSK_USER:$KIOSK_USER" "$CFG_DIR/config.json"
+# Privileged updater (root-owned in /usr/local/sbin so the kiosk user can't edit
+# it) + the scoped NOPASSWD sudoers entry that lets the receiver invoke it.
+sudo install -m 0755 "$TARGET_DIR/display/update.sh" /usr/local/sbin/stackpi-display-update.sh
+sudo install -m 0440 "$TARGET_DIR/display/sudoers.d/stackpi-display-update" /etc/sudoers.d/stackpi-display-update
 sudo install -m 0644 "$TARGET_DIR/display/sway-display.conf" /etc/stackpi-display/sway-display.conf
 sudo install -m 0755 "$TARGET_DIR/display/display-kiosk-launch.sh" /usr/local/bin/display-kiosk-launch.sh
 sudo cp "$TARGET_DIR/display/"*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-ok "receiver + units installed"
+ok "receiver + updater + units installed"
 
-# --- 5. kiosk prep (mirrors the primary's setup-kiosk) ---------------------
+# --- 5a. update mode: restart services, done -------------------------------
+if [[ "$MODE" == "update" ]]; then
+  info "Restarting display services"
+  sudo systemctl restart stackpi-display.service
+  sudo systemctl restart stackpi-display-kiosk.service 2>/dev/null || true
+  ok "update complete"
+  exit 0
+fi
+
+# --- 5b. kiosk prep (bootstrap only; mirrors the primary's setup-kiosk) -----
 info "Kiosk prep: groups, multi-user target, disable display manager"
 sudo usermod -aG video,input,render,tty "$KIOSK_USER"
 sudo systemctl set-default multi-user.target >/dev/null

@@ -16,6 +16,7 @@ See status-protocol.md for the snapshot schema.
 import json
 import logging
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -23,7 +24,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 log = logging.getLogger("stackpi.display.receiver")
 
@@ -35,6 +36,7 @@ DEFAULTS = {
     "http_port": 8080,
     "web_dir": "/opt/stackpi-display/web",
     "screen": "status",
+    "repo_dir": "/home/csg/StackPI_v2",
 }
 
 # Live config (group/port can change at runtime via /api/config).
@@ -224,6 +226,166 @@ def net_status() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Software update (mirrors the primary's /local/update + stackpi-update.sh)
+# ---------------------------------------------------------------------------
+#
+# The display updater re-runs the slim install (git pull → rebuild the export →
+# reinstall → restart the services). The heavy lifting is in the privileged
+# /usr/local/sbin/stackpi-display-update.sh (root via a scoped NOPASSWD sudoers
+# entry); these helpers list git revisions, kick it off, and report progress by
+# reading the state/log files it writes to /run/stackpi-display.
+
+UPDATER = "/usr/local/sbin/stackpi-display-update.sh"
+UPDATE_UNIT = "stackpi-display-update.service"
+UPDATE_STATE_FILE = "/run/stackpi-display/update.state"
+UPDATE_LOG_FILE = "/run/stackpi-display/update.log"
+DEFAULT_BRANCH = "dev"
+LOG_TAIL_LINES = 200
+COMMITS_LIMIT_DEFAULT = 20
+COMMITS_LIMIT_MAX = 100
+# Branch/commit refs reach `git checkout`/`reset` in the privileged updater, so
+# allow only safe git-ref characters (the updater re-validates too).
+_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+
+
+def _valid_ref(ref: str) -> bool:
+    return bool(_REF_RE.match(ref or ""))
+
+
+def _git(args: List[str], timeout: int = 10) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(cfg("repo_dir")), *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {(proc.stderr or proc.stdout).strip()}")
+    return proc.stdout.strip()
+
+
+def _fetch() -> bool:
+    try:
+        _git(["fetch", "--quiet", "--prune", "origin"], timeout=20)
+        return True
+    except (RuntimeError, subprocess.SubprocessError, OSError) as e:
+        log.info("update fetch failed (offline?): %s", e)
+        return False
+
+
+def _current_branch() -> str:
+    try:
+        b = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+        return b if b and b != "HEAD" else DEFAULT_BRANCH
+    except (RuntimeError, subprocess.SubprocessError, OSError):
+        return DEFAULT_BRANCH
+
+
+def _list_branches() -> List[str]:
+    try:
+        out = _git(["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])
+    except (RuntimeError, subprocess.SubprocessError, OSError):
+        return []
+    names = []
+    for line in out.splitlines():
+        name = line.strip()
+        if not name or name.endswith("/HEAD"):
+            continue
+        names.append(name[len("origin/"):] if name.startswith("origin/") else name)
+    return sorted(set(names))
+
+
+def _list_commits(branch: str, limit: int) -> List[dict]:
+    # NUL-separated records, \x1f-separated fields (safe for multi-line bodies).
+    try:
+        out = _git(["log", f"origin/{branch}", f"-n{int(limit)}",
+                    "--format=%H%x1f%h%x1f%cI%x1f%an%x1f%B%x00"])
+    except (RuntimeError, subprocess.SubprocessError, OSError):
+        return []
+    commits = []
+    for record in out.split("\x00"):
+        record = record.lstrip("\n")
+        if not record.strip():
+            continue
+        parts = record.split("\x1f", 4)
+        if len(parts) < 5:
+            continue
+        sha, short, date, author, body = parts
+        body = body.strip("\n")
+        commits.append({"sha": sha, "short": short, "date": date, "author": author,
+                        "subject": body.splitlines()[0] if body else "", "body": body})
+    return commits
+
+
+def _update_run_state() -> str:
+    try:
+        with open(UPDATE_STATE_FILE, encoding="utf-8") as fh:
+            return fh.read().strip() or "idle"
+    except OSError:
+        return "idle"
+
+
+def _update_unit_active() -> bool:
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", UPDATE_UNIT],
+                              timeout=5).returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _update_effective_state() -> str:
+    # A 'running' file with no live unit means the run died — report 'failed' so
+    # the UI doesn't spin forever.
+    state = _update_run_state()
+    if state == "running" and not _update_unit_active():
+        return "failed"
+    return state
+
+
+def _update_log_tail(lines: int = LOG_TAIL_LINES) -> str:
+    try:
+        with open(UPDATE_LOG_FILE, encoding="utf-8") as fh:
+            return "\n".join(fh.read().splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
+def _update_status(branch: Optional[str], commit: Optional[str]) -> Dict[str, Any]:
+    try:
+        current = _git(["rev-parse", "HEAD"])
+    except (RuntimeError, subprocess.SubprocessError, OSError) as e:
+        return {"error": str(e), "state": _update_effective_state()}
+    current_branch = _current_branch()
+    branch = branch or current_branch
+    fetch_ok = _fetch()
+    target: Optional[str] = None
+    behind = 0
+    try:
+        target = commit if commit else _git(["rev-parse", f"origin/{branch}"])
+        behind = int(_git(["rev-list", "--count", f"HEAD..{target}"]))
+    except (RuntimeError, ValueError, subprocess.SubprocessError, OSError) as e:
+        log.info("update target lookup failed: %s", e)
+    return {
+        "branch": branch, "current_branch": current_branch,
+        "current": current, "current_short": current[:7],
+        "target": target, "target_short": target[:7] if target else None,
+        "behind": behind, "update_available": bool(target and target != current),
+        "fetch_ok": fetch_ok, "state": _update_effective_state(),
+        "log_tail": _update_log_tail(),
+    }
+
+
+def _trigger_update(branch: Optional[str], commit: Optional[str]) -> None:
+    cmd = ["sudo", "-n", UPDATER, "start"]
+    if branch:
+        cmd.append(branch)
+        if commit:
+            cmd.append(commit)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if proc.returncode != 0:
+        raise RuntimeError(f"updater exited {proc.returncode}: {(proc.stderr or '').strip()}")
+    log.info("update trigger: %s", proc.stdout.strip())
+
+
+# ---------------------------------------------------------------------------
 # HTTP server
 # ---------------------------------------------------------------------------
 
@@ -258,6 +420,42 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return {}
 
+    def _q(self) -> Dict[str, str]:
+        q = parse_qs(urlparse(self.path).query)
+        return {k: v[0] for k, v in q.items()}
+
+    # --- software update (mirrors the primary's /local/update) -------------
+    def _update_get(self, path: str) -> None:
+        q = self._q()
+        branch = q.get("branch")
+        commit = q.get("commit")
+        if branch is not None and not _valid_ref(branch):
+            self._json({"error": "invalid branch name"}, 400)
+            return
+        if commit is not None and not _valid_ref(commit):
+            self._json({"error": "invalid commit"}, 400)
+            return
+        if path == "/api/update/branches":
+            fetch_ok = _fetch()
+            self._json({"current_branch": _current_branch(),
+                        "branches": _list_branches(), "fetch_ok": fetch_ok})
+            return
+        if path == "/api/update/commits":
+            if not branch:
+                self._json({"error": "branch required"}, 400)
+                return
+            try:
+                limit = max(1, min(COMMITS_LIMIT_MAX, int(q.get("limit", COMMITS_LIMIT_DEFAULT))))
+            except ValueError:
+                limit = COMMITS_LIMIT_DEFAULT
+            _fetch()
+            self._json({"branch": branch, "commits": _list_commits(branch, limit)})
+            return
+        if path == "/api/update/status":
+            self._json(_update_status(branch, commit))
+            return
+        self._json({"error": "not found"}, 404)
+
     # --- GET ---------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
@@ -273,6 +471,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/net":
             self._json(net_status())
+            return
+        if path.startswith("/api/update"):
+            self._update_get(path)
             return
         if path in SSE_PATHS:
             self._sse(SSE_PATHS[path])
@@ -322,6 +523,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/wifi/connect":
             self._json(wifi_connect(str(body.get("ssid", "")), str(body.get("password", ""))))
+            return
+        if path == "/api/update/start":
+            branch = body.get("branch") or None
+            commit = body.get("commit") or None
+            if branch is not None and not _valid_ref(str(branch)):
+                self._json({"ok": False, "error": "invalid branch name"}, 400)
+                return
+            if commit is not None and not _valid_ref(str(commit)):
+                self._json({"ok": False, "error": "invalid commit"}, 400)
+                return
+            if _update_unit_active():
+                self._json({"ok": True, "started": False, "already_running": True, "state": "running"})
+                return
+            try:
+                _trigger_update(branch, commit)
+            except (RuntimeError, subprocess.SubprocessError, OSError) as e:
+                log.exception("update start failed")
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+            self._json({"ok": True, "started": True, "state": "running"})
             return
         self.send_error(404)
 

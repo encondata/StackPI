@@ -47,6 +47,21 @@
     <button onclick="saveCfg()">Save</button>
     <div id="cfgMsg"></div>
   </div>
+
+  <h2>Software update</h2>
+  <div class="card">
+    <div id="ver" class="mono">…</div>
+    <label>Branch</label>
+    <select id="branch"></select>
+    <label>Commit</label>
+    <select id="commit"></select>
+    <div style="display:flex; gap:8px; align-items:center">
+      <button id="updBtn" onclick="startUpdate()">Update</button>
+      <button class="sec" onclick="loadBranches()">Refresh</button>
+    </div>
+    <div id="updMsg"></div>
+    <pre id="updLog" class="mono" style="white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:10px; display:none"></pre>
+  </div>
 </div>
 
 <script>
@@ -104,7 +119,69 @@ async function saveCfg(){
   msg("cfgMsg", ok ? "Saved." : ("Failed: " + (body.error||"")), ok);
 }
 function msg(id, text, ok){ const e=document.getElementById(id); e.className="msg "+(ok===undefined?"":ok?"ok":"err"); e.textContent=text; }
-loadNet(); loadCfg();
+
+// --- software update ---
+let updTimer = null;
+async function loadBranches(){
+  const sel = document.getElementById("branch");
+  sel.replaceChildren(el("option", null, "loading…"));
+  const { body } = await j("/api/update/branches");
+  const branches = body.branches || [];
+  const cur = body.current_branch;
+  sel.replaceChildren(...branches.map(b => { const o = el("option", null, b); o.value = b; return o; }));
+  if (cur && branches.includes(cur)) sel.value = cur;
+  sel.onchange = loadCommits;
+  await loadCommits();
+}
+async function loadCommits(){
+  const branch = document.getElementById("branch").value;
+  const sel = document.getElementById("commit");
+  if (!branch){ sel.replaceChildren(); return; }
+  sel.replaceChildren(el("option", null, "loading…"));
+  const { body } = await j("/api/update/commits?branch=" + encodeURIComponent(branch) + "&limit=20");
+  const commits = body.commits || [];
+  // Dropdown shows only the short id + date; the tip is the default.
+  sel.replaceChildren(...commits.map((c, i) => {
+    const o = el("option", null, c.short + "  " + (c.date || "").slice(0, 10) + (i === 0 ? "  (latest)" : ""));
+    o.value = c.sha; return o;
+  }));
+  refreshStatus();
+}
+async function refreshStatus(){
+  const branch = document.getElementById("branch").value;
+  const commit = document.getElementById("commit").value;
+  const qs = "?branch=" + encodeURIComponent(branch) + (commit ? "&commit=" + encodeURIComponent(commit) : "");
+  const { body } = await j("/api/update/status" + qs);
+  const cur = body.current_short || "?";
+  document.getElementById("ver").textContent =
+    "Installed: " + cur + (body.update_available ? ("  →  " + (body.target_short || "?") + " (" + body.behind + " behind)") : "  (up to date)");
+  return body;
+}
+async function startUpdate(){
+  const branch = document.getElementById("branch").value;
+  const commit = document.getElementById("commit").value || undefined;
+  document.getElementById("updBtn").disabled = true;
+  msg("updMsg", "Starting update…");
+  const { ok, body } = await j("/api/update/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ branch, commit }) });
+  if (!ok && !body.started){ msg("updMsg", "Failed: " + (body.error || "could not start"), false); document.getElementById("updBtn").disabled = false; return; }
+  msg("updMsg", "Updating — the display will rebuild and restart. This can take a few minutes on a Pi.");
+  document.getElementById("updLog").style.display = "block";
+  pollUpdate();
+}
+function pollUpdate(){
+  if (updTimer) clearInterval(updTimer);
+  updTimer = setInterval(async () => {
+    let body;
+    try { body = await refreshStatus(); } catch { return; }  // receiver restart → transient fetch error
+    const logEl = document.getElementById("updLog");
+    logEl.textContent = body.log_tail || "";
+    logEl.scrollTop = logEl.scrollHeight;
+    if (body.state === "success"){ clearInterval(updTimer); msg("updMsg", "Update complete.", true); document.getElementById("updBtn").disabled = false; }
+    else if (body.state === "failed"){ clearInterval(updTimer); msg("updMsg", "Update failed — see the log below.", false); document.getElementById("updBtn").disabled = false; }
+  }, 2000);
+}
+
+loadNet(); loadCfg(); loadBranches();
 </script>
 </body>
 </html>
