@@ -4,6 +4,8 @@
 #include "lamps.h"
 #include "audio.h"
 #include "net.h"
+#include "notify.h"
+#include "web.h"
 
 static Lamps lamps;
 static bool g_statusOwns = true;       // does the status indicator currently own the lamps?
@@ -20,6 +22,16 @@ static void clear_all(uint32_t now) {
   for (int c = 0; c < 4; c++)
     lamps.apply(statusCmd((Color)c, Pattern::Solid, 0, 1, 1), now);
 }
+
+// Apply a light/sound from any source (multicast or the test web page). A live
+// command supersedes the status indication.
+void deliver_light(const LightCommand& c) {
+  uint32_t now = millis();
+  if (g_statusOwns) { clear_all(now); g_statusOwns = false; }
+  lamps.apply(c, now);
+}
+
+void deliver_sound(const SoundCommand& c) { audio_play(c); }
 
 // Drive the tower to reflect connection state. Returns true while it "owns"
 // the lamps (i.e. not yet connected-and-cleared), false once normal operation
@@ -76,6 +88,9 @@ void setup() {
   audio_begin();
 
   net_begin();           // blocks until WiFi connect or portal timeout
+  if (net_state() == NetState::Connected) {
+    web_begin();         // serve the test page once we have an IP
+  }
   Serial.println("[stacklight] setup done, entering main loop");
 
   // Boot chime — played AFTER Wi-Fi setup so the audio and Wi-Fi current
@@ -93,7 +108,7 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
-  bool statusOwnsLamps = show_status(now);
+  show_status(now);      // drives the status animation; deliver_light() yields it
 
   char buf[600];
   int len = net_poll(buf, sizeof(buf) - 1);
@@ -103,18 +118,14 @@ void loop() {
     if (m.kind == MsgKind::Light) {
       Serial.printf("[rx] light: color=%d pattern=%d bright=%u\n",
                     (int)m.light.color, (int)m.light.pattern, m.light.brightness);
-      // A live notification supersedes the status indication.
-      if (statusOwnsLamps) {
-        clear_all(now);
-        g_statusOwns = false;
-      }
-      lamps.apply(m.light, now);
+      deliver_light(m.light);
     } else if (m.kind == MsgKind::Sound) {
       Serial.printf("[rx] sound: %s vol=%u\n", m.sound.sound, m.sound.volume);
-      audio_play(m.sound);
+      deliver_sound(m.sound);
     }
   }
 
+  web_handle();
   lamps.update(now);
   delay(2);
 }
