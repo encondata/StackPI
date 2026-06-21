@@ -13,7 +13,10 @@ Settings  g_settings;
 NetState  g_state = NetState::Connecting;
 bool      g_portal = false;
 
-void on_portal(WiFiManager*) { g_portal = true; }
+void on_portal(WiFiManager*) {
+  g_portal = true;
+  Serial.printf("[net] config portal up: connect to AP \"%s\"\n", AP_NAME);
+}
 }
 
 void net_begin() {
@@ -29,15 +32,29 @@ void net_begin() {
   wm.addParameter(&pPort);
   wm.setAPCallback(on_portal);
 
-  // First boot (no operator-saved creds): preload the factory default network
-  // so the device joins it without opening the portal. Operator creds saved
-  // via the portal persist and take priority on later boots.
-  if (!wm.getWiFiIsSaved()) {
-    wm.preloadWiFi(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
-  }
-
   g_state = NetState::Connecting;
-  bool ok = wm.autoConnect(AP_NAME);   // blocks: portal if no saved creds / fail
+  Serial.println("[net] connecting Wi-Fi...");
+
+  bool ok;
+  if (wm.getWiFiIsSaved()) {
+    // Operator configured creds via the portal before — use them.
+    ok = wm.autoConnect(AP_NAME);
+  } else {
+    // First boot, no saved creds: try the factory-default network directly in
+    // STA mode (WiFiManager's preload check ignores non-persisted creds).
+    Serial.printf("[net] no saved creds; trying default SSID \"%s\"\n", DEFAULT_WIFI_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) {
+      delay(250);
+    }
+    ok = (WiFi.status() == WL_CONNECTED);
+    if (!ok) {
+      Serial.println("[net] default network unreachable; opening config portal");
+      ok = wm.autoConnect(AP_NAME);   // no saved creds -> captive portal
+    }
+  }
 
   // Persist any operator edits to group/port.
   Settings edited = g_settings;
@@ -52,15 +69,25 @@ void net_begin() {
     g_settings = edited;
   }
 
-  if (!ok) { g_state = NetState::Disconnected; return; }
+  if (!ok) {
+    Serial.println("[net] Wi-Fi connect failed (timed out)");
+    g_state = NetState::Disconnected;
+    return;
+  }
+
+  Serial.printf("[net] connected: ssid=%s  ip=%s  rssi=%d\n",
+                WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+                WiFi.RSSI());
 
   IPAddress group;
   if (!group.fromString(g_settings.group)) {
     log_e("net: bad multicast group '%s'", g_settings.group);
+    Serial.printf("[net] bad multicast group '%s'\n", g_settings.group);
     g_state = NetState::Disconnected;
     return;
   }
   udp.beginMulticast(group, g_settings.port);
+  Serial.printf("[net] joined multicast %s:%u\n", g_settings.group, g_settings.port);
   g_portal = false;
   g_state = NetState::Connected;
 }

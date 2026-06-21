@@ -65,6 +65,9 @@ static bool show_status(uint32_t now) {
 
 void setup() {
   Serial.begin(115200);
+  delay(300);
+  Serial.println();
+  Serial.println("[stacklight] booting");
   lamps.begin();
   // Drive a static blue-solid indication during the blocking net_begin() phase.
   // The loop is not running yet, so we push it to the pins immediately.
@@ -72,8 +75,12 @@ void setup() {
   lamps.update(millis());
   audio_begin();
 
-  // Boot chime: enqueue the alert sound. The audio task runs on core 0, so it
-  // plays during the blocking net_begin() below. Ignored if the WAV is missing.
+  net_begin();           // blocks until WiFi connect or portal timeout
+  Serial.println("[stacklight] setup done, entering main loop");
+
+  // Boot chime — played AFTER Wi-Fi setup so the audio and Wi-Fi current
+  // spikes don't overlap (which can brown out a marginal USB supply).
+  // Ignored if the WAV is missing.
   SoundCommand boot;
   strncpy(boot.sound, BOOT_SOUND_ID, sizeof(boot.sound) - 1);
   boot.sound[sizeof(boot.sound) - 1] = '\0';
@@ -81,8 +88,6 @@ void setup() {
   boot.duration_ms = 400;
   boot.repeat_count = 1;
   audio_play(boot);
-
-  net_begin();           // blocks until WiFi connect or portal timeout
 }
 
 void loop() {
@@ -96,6 +101,8 @@ void loop() {
     buf[len] = '\0';
     ParsedMessage m = parse_message(buf, len);
     if (m.kind == MsgKind::Light) {
+      Serial.printf("[rx] light: color=%d pattern=%d bright=%u\n",
+                    (int)m.light.color, (int)m.light.pattern, m.light.brightness);
       // A live notification supersedes the status indication.
       if (statusOwnsLamps) {
         clear_all(now);
@@ -103,6 +110,7 @@ void loop() {
       }
       lamps.apply(m.light, now);
     } else if (m.kind == MsgKind::Sound) {
+      Serial.printf("[rx] sound: %s vol=%u\n", m.sound.sound, m.sound.volume);
       audio_play(m.sound);
     }
   }

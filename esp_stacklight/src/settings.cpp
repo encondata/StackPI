@@ -10,7 +10,9 @@ static const char* NS = "stacklight";
 Settings settings_load() {
   Settings s;
   Preferences p;
-  p.begin(NS, true);                       // read-only
+  p.begin(NS, false);                      // read-write: creates the namespace
+                                           // on first boot (avoids a NOT_FOUND
+                                           // error log from a read-only open)
   String g = p.getString("group", DEFAULT_MCAST_GROUP);
   uint32_t port = p.getUInt("port", DEFAULT_MCAST_PORT);
   p.end();
