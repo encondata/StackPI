@@ -67,6 +67,7 @@ int net_poll(char* buf, size_t maxlen) {
     // (re)joined after connect or reconnect
     IPAddress group;
     if (group.fromString(g_settings.group)) {
+      udp.stop();
       udp.beginMulticast(group, g_settings.port);
     }
     g_state = NetState::Connected;

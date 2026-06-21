@@ -6,6 +6,8 @@
 #include "net.h"
 
 static Lamps lamps;
+static bool g_statusOwns = true;       // does the status indicator currently own the lamps?
+static uint32_t g_connectedAt = 0;
 
 // Build a status LightCommand for one color/pattern.
 static LightCommand statusCmd(Color c, Pattern p, uint8_t bright, uint32_t dur, uint8_t rep) {
@@ -24,11 +26,11 @@ static void clear_all(uint32_t now) {
 // should take over.
 static bool show_status(uint32_t now) {
   static NetState last = NetState::Connecting;
-  static bool greeted = false;
   NetState s = net_state();
 
   if (s != last) {
     last = s;
+    g_statusOwns = true;               // each new state re-asserts the indicator
     switch (s) {
       case NetState::Portal:
         clear_all(now);
@@ -41,8 +43,7 @@ static bool show_status(uint32_t now) {
       case NetState::Connected:
         clear_all(now);
         lamps.apply(statusCmd(Color::Green, Pattern::Solid, 100, 1000, 1), now);
-        greeted = true;
-        // schedule clear ~1s later via the static timestamp below
+        g_connectedAt = now;
         break;
       case NetState::Disconnected:
         clear_all(now);
@@ -51,17 +52,15 @@ static bool show_status(uint32_t now) {
     }
   }
 
-  // Once connected, hold the green "ready" for ~1s, then release lamps.
-  static uint32_t connectedAt = 0;
-  if (s == NetState::Connected) {
-    if (connectedAt == 0) connectedAt = now;
-    if (now - connectedAt >= 1000) { clear_all(now); return false; }
-    return true;
-  } else {
-    connectedAt = 0;
+  if (!g_statusOwns) return false;
+
+  // Release the green "ready" indication ~1s after connecting.
+  if (s == NetState::Connected && now - g_connectedAt >= 1000) {
+    clear_all(now);
+    g_statusOwns = false;
+    return false;
   }
-  (void)greeted;
-  return true;   // portal/connecting/disconnected keep owning the lamps
+  return true;
 }
 
 void setup() {
@@ -85,13 +84,18 @@ void loop() {
   if (len > 0) {
     buf[len] = '\0';
     ParsedMessage m = parse_message(buf, len);
-    if (m.kind == MsgKind::Light && !statusOwnsLamps) {
+    if (m.kind == MsgKind::Light) {
+      // A live notification supersedes the status indication.
+      if (statusOwnsLamps) {
+        clear_all(now);
+        g_statusOwns = false;
+      }
       lamps.apply(m.light, now);
     } else if (m.kind == MsgKind::Sound) {
-      audio_play(m.sound);     // sound is independent of status ownership
+      audio_play(m.sound);
     }
   }
 
   lamps.update(now);
-  delay(2);                    // ~500 Hz animation tick
+  delay(2);
 }
