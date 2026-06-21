@@ -35,20 +35,34 @@ void net_begin() {
   g_state = NetState::Connecting;
   Serial.println("[net] connecting Wi-Fi...");
 
-  // First boot (no operator-saved creds): seed the factory-default network into
-  // NVS so WiFiManager's autoConnect joins it using its own retry/timeout. A
-  // bare WiFi.begin() loop gives up before the AP finishes associating (the AP
-  // often throws one ASSOC_FAIL before succeeding). Operator creds saved via
-  // the portal persist and take priority on later boots.
-  if (!wm.getWiFiIsSaved()) {
-    Serial.printf("[net] seeding default SSID \"%s\"\n", DEFAULT_WIFI_SSID);
-    WiFi.persistent(true);
-    WiFi.begin(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
-    delay(200);
-  }
   wm.setConnectRetries(3);
   wm.setConnectTimeout(20);
-  bool ok = wm.autoConnect(AP_NAME);   // saved/seeded creds, else captive portal
+
+  bool ok;
+  if (wm.getWiFiIsSaved()) {
+    // Operator/prior creds in NVS — use WiFiManager's robust connect path.
+    ok = wm.autoConnect(AP_NAME);
+  } else {
+    // First boot: join the factory default directly in STA mode with a generous
+    // timeout. WiFiManager ignores a seeded WiFi.begin ("No wifi saved,
+    // skipping") and would start the power-hungry AP, so we connect ourselves
+    // and stay in STA the whole time (no AP, no brownout). WiFi.persistent
+    // saves the creds, so later boots take the fast saved-creds path above.
+    Serial.printf("[net] no saved creds; joining default \"%s\" (up to 35s)\n", DEFAULT_WIFI_SSID);
+    WiFi.persistent(true);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 35000) {
+      delay(250);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      ok = true;
+    } else {
+      Serial.println("[net] default join failed; opening config portal");
+      ok = wm.autoConnect(AP_NAME);
+    }
+  }
 
   // Persist any operator edits to group/port.
   Settings edited = g_settings;
