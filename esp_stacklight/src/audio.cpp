@@ -5,12 +5,10 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <string.h>
-// arduino-esp32 2.x I2S: bundled I2S library (no ESP_I2S.h; that's 3.x only).
-// Constructor: I2SClass(deviceIndex, clockGenerator, sdPin, sckPin, fsPin)
-//   sdPin  = data out  = PIN_I2S_DIN  (25)
-//   sckPin = bit clock = PIN_I2S_BCLK (27)
-//   fsPin  = word sel  = PIN_I2S_LRC  (26)
-#include <I2S.h>
+// Drive the MAX98357A with the stable ESP-IDF I2S driver. The Arduino 2.x
+// I2S.h wrapper crashes in its DMA-complete callback (null event queue), so we
+// use driver/i2s.h directly.
+#include "driver/i2s.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -23,10 +21,9 @@ struct PlayReq {
   uint8_t repeat;
 };
 
-// I2SClass global: pins wired at construction for MAX98357A (Philips/I2S standard).
-I2SClass    i2s(0, 0, PIN_I2S_DIN, PIN_I2S_BCLK, PIN_I2S_LRC);
+const i2s_port_t I2S_PORT = I2S_NUM_0;
 QueueHandle_t g_queue = nullptr;   // length 1; newest request preempts
-bool g_i2s_started = false;
+bool g_i2s_installed = false;
 
 static uint32_t le32(const uint8_t* p) {
   return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -35,7 +32,6 @@ static uint16_t le16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); 
 
 // Walk the RIFF chunks directly from the file, skipping any chunk that isn't
 // fmt/data (e.g. Apple afconvert's "FLLR" page-alignment filler, or "fact").
-// This avoids the fixed-buffer limit of wav_parse_header for real files.
 static bool read_wav_info(File& f, WavInfo& w) {
   w = WavInfo{};
   uint8_t hdr[12];
@@ -67,7 +63,36 @@ static bool read_wav_info(File& f, WavInfo& w) {
   return false;
 }
 
+static void i2s_install() {
+  i2s_config_t cfg = {};
+  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  cfg.sample_rate          = 16000;
+  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;   // mono -> MAX98357A
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  cfg.intr_alloc_flags     = 0;
+  cfg.dma_buf_count        = 8;
+  cfg.dma_buf_len          = 256;
+  cfg.use_apll             = false;
+  cfg.tx_desc_auto_clear   = true;
+
+  i2s_pin_config_t pins = {};
+  pins.bck_io_num   = PIN_I2S_BCLK;
+  pins.ws_io_num    = PIN_I2S_LRC;
+  pins.data_out_num = PIN_I2S_DIN;
+  pins.data_in_num  = I2S_PIN_NO_CHANGE;
+
+  if (i2s_driver_install(I2S_PORT, &cfg, 0, nullptr) != ESP_OK) {
+    log_e("audio: i2s_driver_install failed");
+    return;
+  }
+  i2s_set_pin(I2S_PORT, &pins);
+  g_i2s_installed = true;
+}
+
 void play_file(const PlayReq& req) {
+  if (!g_i2s_installed) return;
+
   File f = LittleFS.open(req.path, "r");
   if (!f) { log_e("audio: missing %s", req.path); return; }
 
@@ -78,11 +103,7 @@ void play_file(const PlayReq& req) {
     return;
   }
 
-  if (g_i2s_started) i2s.end();
-  // I2S_PHILIPS_MODE is standard left-justified I2S, correct for MAX98357A.
-  // 16-bit mono WAV; driver handles frame format internally.
-  i2s.begin(I2S_PHILIPS_MODE, (int)w.sample_rate, 16);
-  g_i2s_started = true;
+  i2s_set_clk(I2S_PORT, w.sample_rate, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
 
   for (uint8_t rep = 0; rep < req.repeat; rep++) {
     f.seek(w.data_offset);
@@ -95,11 +116,13 @@ void play_file(const PlayReq& req) {
       if (got == 0) break;
       size_t samples = got / 2;
       for (size_t i = 0; i < samples; i++) buf[i] = wav_scale_sample(buf[i], req.volume);
-      i2s.write((const void*)buf, samples * 2);
+      size_t written = 0;
+      i2s_write(I2S_PORT, buf, samples * 2, &written, portMAX_DELAY);
       remaining -= got;
     }
   }
   f.close();
+  i2s_zero_dma_buffer(I2S_PORT);   // silence the DAC between clips
 }
 
 void audio_task(void*) {
@@ -117,6 +140,7 @@ void audio_begin() {
   if (!LittleFS.begin(true)) {
     log_e("audio: LittleFS mount failed");
   }
+  i2s_install();
   g_queue = xQueueCreate(1, sizeof(PlayReq));
   xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 1, nullptr, 0);
 }
