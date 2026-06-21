@@ -20,7 +20,14 @@ type Status = {
   log_tail: string;
 };
 
-type Commit = { sha: string; short: string; date: string; subject: string };
+type Commit = {
+  sha: string;
+  short: string;
+  date: string;
+  author: string;
+  subject: string;
+  body: string;
+};
 type Phase = "loading" | "idle" | "updating";
 
 const POLL_MS = 1500;
@@ -159,6 +166,13 @@ export default function SoftwareUpdatePage() {
     setPhase("updating");
   }
 
+  // The commit the deploy will land on: the picked one, or the tip ("").
+  const selectedCommit =
+    commits.find((c) => c.sha === commit) ?? commits[0] ?? null;
+  const commitBody = selectedCommit
+    ? selectedCommit.body.split("\n").slice(1).join("\n").trim()
+    : "";
+
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="text-2xl font-semibold tracking-tight">Software Update</h1>
@@ -213,6 +227,29 @@ export default function SoftwareUpdatePage() {
                   </select>
                 </label>
               </div>
+
+              {selectedCommit && (
+                <div className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Commit details
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-zinc-900">
+                    {selectedCommit.subject}
+                  </p>
+                  <p className="mt-1 break-all font-mono text-xs text-zinc-500">
+                    {selectedCommit.short} · {selectedCommit.sha}
+                  </p>
+                  <p className="mt-0.5 text-xs text-zinc-500">
+                    {selectedCommit.author} ·{" "}
+                    {new Date(selectedCommit.date).toLocaleString()}
+                  </p>
+                  {commitBody && (
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white p-2 font-mono text-xs text-zinc-700">
+                      {commitBody}
+                    </pre>
+                  )}
+                </div>
+              )}
 
               {status && (
                 <p className="mt-4 font-mono text-xs text-zinc-600">

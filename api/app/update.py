@@ -115,28 +115,49 @@ def _list_branches() -> List[str]:
     return sorted(set(names))
 
 
+def _parse_commits(out: str) -> List[dict]:
+    """Parse `git log` output. Records are NUL-separated (so multi-line bodies
+    are safe); fields within a record are \\x1f-separated:
+    sha, short, date, author, body. The subject is the body's first line."""
+    commits = []
+    for record in out.split("\x00"):
+        record = record.lstrip("\n")
+        if not record.strip():
+            continue
+        parts = record.split("\x1f", 4)
+        if len(parts) < 5:
+            continue
+        sha, short, date, author, body = parts
+        body = body.strip("\n")
+        subject = body.splitlines()[0] if body else ""
+        commits.append(
+            {
+                "sha": sha,
+                "short": short,
+                "date": date,
+                "author": author,
+                "subject": subject,
+                "body": body,
+            }
+        )
+    return commits
+
+
 def _list_commits(branch: str, limit: int) -> List[dict]:
-    """Recent commits on origin/<branch>, newest first. \\x1f-separated fields
-    avoid clashing with anything in a commit subject."""
+    """Recent commits on origin/<branch>, newest first (with author + full
+    message body for the commit-details panel)."""
     try:
         out = _git(
             [
                 "log",
                 f"origin/{branch}",
                 f"-n{int(limit)}",
-                "--format=%H%x1f%h%x1f%cI%x1f%s",
+                "--format=%H%x1f%h%x1f%cI%x1f%an%x1f%B%x00",
             ]
         )
     except RuntimeError:
         return []
-    commits = []
-    for line in out.splitlines():
-        parts = line.split("\x1f")
-        if len(parts) == 4:
-            commits.append(
-                {"sha": parts[0], "short": parts[1], "date": parts[2], "subject": parts[3]}
-            )
-    return commits
+    return _parse_commits(out)
 
 
 def _run_state() -> str:

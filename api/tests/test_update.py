@@ -163,6 +163,27 @@ def test_commits_rejects_bad_branch() -> None:
     assert client.get("/local/update/commits?branch=bad;evil").status_code == 400
 
 
+def test_parse_commits_multiline_body() -> None:
+    def rec(h, s, d, a, b):
+        return f"{h}\x1f{s}\x1f{d}\x1f{a}\x1f{b}\x00"
+
+    out = "\n".join(
+        [
+            rec("a" * 40, "aaaaaaa", "2026-06-21T00:00:00Z", "Dev",
+                "feat: thing\n\nlong body line 1\nline 2"),
+            rec("b" * 40, "bbbbbbb", "2026-06-20T00:00:00Z", "Dev", "fix: bug"),
+        ]
+    )
+    commits = update_mod._parse_commits(out)
+    assert len(commits) == 2
+    assert commits[0]["subject"] == "feat: thing"
+    assert "long body line 1" in commits[0]["body"]
+    assert commits[0]["author"] == "Dev"
+    assert commits[0]["short"] == "aaaaaaa"
+    assert commits[1]["subject"] == "fix: bug"
+    assert commits[1]["body"] == "fix: bug"
+
+
 def test_status_with_explicit_commit(monkeypatch) -> None:
     head = "a" * 40
     commit = "c" * 40
