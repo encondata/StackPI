@@ -1,16 +1,14 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+// Self-hosted Geist (Vercel's `geist` package) instead of next/font/google, so
+// the build never fetches from Google Fonts — the export build runs on offline /
+// Google-blocked Pis. Same fonts; the default CSS variables (--font-geist-sans /
+// --font-geist-mono) are exactly what globals.css already binds.
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const geistSans = GeistSans;
+const geistMono = GeistMono;
 
 export const metadata: Metadata = {
   title: "StackPI",

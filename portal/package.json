@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "geist": "^1.7.2",
     "gsap": "^3.12.5",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.17.0",
