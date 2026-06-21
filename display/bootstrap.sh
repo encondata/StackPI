@@ -51,19 +51,24 @@ fi
 
 # --- 1. packages -----------------------------------------------------------
 if [[ "$MODE" == "bootstrap" ]]; then
-  info "Installing packages (chromium, sway, git, node for the one-time export build)"
+  info "Installing packages (chromium, sway, git, node+npm for the one-time export build)"
   sudo apt-get update -y
   sudo apt-get install -y git curl ca-certificates chromium sway
 
-  # Node 20 (NodeSource) — only needed to build the static export once.
-  if ! command -v node >/dev/null || [[ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 20 ]]; then
-    info "Installing Node 20 (for the export build)"
+  # Node + npm for the one-time export build. The distro nodejs package does NOT
+  # bundle npm (it's a separate package), so install both. Pi OS trixie ships
+  # Node 20 already; only fall back to NodeSource if the distro Node is <20.
+  sudo apt-get install -y nodejs npm
+  NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  if [[ "$NODE_MAJOR" -lt 20 ]]; then
+    info "Distro Node is $NODE_MAJOR (<20) — installing Node 20 from NodeSource"
     sudo install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
     sudo apt-get update -y && sudo apt-get install -y nodejs
   fi
-  ok "packages installed"
+  command -v npm >/dev/null || sudo apt-get install -y npm
+  ok "packages installed (node $(node -v 2>/dev/null || echo '?'), npm $(npm -v 2>/dev/null || echo '?'))"
 else
   info "Update mode — skipping package install"
 fi
