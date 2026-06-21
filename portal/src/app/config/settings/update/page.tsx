@@ -221,7 +221,7 @@ export default function SoftwareUpdatePage() {
                     <option value="">latest (tip)</option>
                     {commits.map((c) => (
                       <option key={c.sha} value={c.sha}>
-                        {c.short} — {c.subject.slice(0, 48)}
+                        {c.short} · {new Date(c.date).toLocaleString()}
                       </option>
                     ))}
                   </select>
