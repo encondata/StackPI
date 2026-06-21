@@ -6,7 +6,9 @@
 
 **Architecture:** Arduino-ESP32 (PlatformIO). Pure logic (protocol parse, lamp state machine, WAV/volume, address validation) lives in Arduino-free files unit-tested on the `native` host env. Hardware wrappers (LEDC PWM, I2S audio, WiFi/multicast, NVS) wrap that logic and are verified on-device. Network + lamps run on the main loop (core 1); audio playback runs in its own FreeRTOS task (core 0).
 
-**Tech Stack:** C++17, PlatformIO, Arduino-ESP32 core 3.x, ArduinoJson v7, WiFiManager, LittleFS, ESP_I2S, LEDC, Preferences (NVS), Unity (tests).
+**Tech Stack:** C++17, PlatformIO, Arduino-ESP32 core 2.x (`espressif32@7.0.1`, pinned), ArduinoJson v7, WiFiManager, LittleFS, `I2S.h`/`I2SClass`, LEDC, Preferences (NVS), Unity (tests).
+
+> **Implementation note (2026-06-21):** The plan was authored assuming Arduino-ESP32 core 3.x (pin-based `ledcAttach`/`ledcWrite`, `ESP_I2S.h`). The installed PlatformIO platform (`espressif32@7.0.1`) resolves to the **2.x** core, so Task 4's `lamps.cpp` uses the channel-based LEDC API (`ledcSetup`/`ledcAttachPin`/`ledcWrite(channel, …)`) and Task 6's `audio.cpp` uses the bundled `<I2S.h>` / `I2SClass` (Philips mode, 16-bit mono) instead of `ESP_I2S.h`. Behavior is identical; the code on disk (source of truth) reflects the 2.x APIs and the platform is pinned. The Task 4/6 code blocks below show the original 3.x form for context.
 
 ## Global Constraints
 

@@ -41,10 +41,13 @@ this spec covers only the device implementation.
 
 ## 3. Framework & build
 
-- **Arduino-ESP32 core via PlatformIO.**
+- **Arduino-ESP32 core via PlatformIO**, platform pinned to `espressif32@7.0.1`
+  (provides the Arduino-ESP32 **2.x** core the firmware is built and verified
+  against). Pinned for reproducibility so a future build cannot silently float
+  to the 3.x core, which has incompatible LEDC and I2S APIs.
 - Libraries: WiFiManager (captive portal + custom params), ArduinoJson (parse),
-  LittleFS (WAV storage), `driver/i2s` (built-in) for audio, LEDC (built-in) for
-  PWM.
+  LittleFS (WAV storage), the bundled `I2S.h` / `I2SClass` (Philips mode) for
+  audio, LEDC (channel-based API) for PWM.
 - LittleFS data image (`data/`) holds the WAV clips, flashed separately.
 
 ## 4. Architecture
