@@ -48,8 +48,13 @@ void net_begin() {
   if (!ok) { g_state = NetState::Disconnected; return; }
 
   IPAddress group;
-  group.fromString(g_settings.group);
+  if (!group.fromString(g_settings.group)) {
+    log_e("net: bad multicast group '%s'", g_settings.group);
+    g_state = NetState::Disconnected;
+    return;
+  }
   udp.beginMulticast(group, g_settings.port);
+  g_portal = false;
   g_state = NetState::Connected;
 }
 
@@ -58,7 +63,14 @@ int net_poll(char* buf, size_t maxlen) {
     g_state = NetState::Disconnected;
     return 0;
   }
-  g_state = NetState::Connected;
+  if (g_state != NetState::Connected) {
+    // (re)joined after connect or reconnect
+    IPAddress group;
+    if (group.fromString(g_settings.group)) {
+      udp.beginMulticast(group, g_settings.port);
+    }
+    g_state = NetState::Connected;
+  }
   int len = udp.parsePacket();
   if (len <= 0) return 0;
   int n = udp.read(buf, maxlen);
