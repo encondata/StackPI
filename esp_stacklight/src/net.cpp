@@ -6,6 +6,8 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiManager.h>
+#include <esp_wifi.h>
+#include <string.h>
 
 namespace {
 WiFiUDP   udp;
@@ -35,33 +37,31 @@ void net_begin() {
   g_state = NetState::Connecting;
   Serial.println("[net] connecting Wi-Fi...");
 
-  wm.setConnectRetries(3);
-  wm.setConnectTimeout(20);
+  // Read the STA creds persisted in NVS directly (WiFiManager's saved-detection
+  // proved unreliable). Use them if present, otherwise the factory default.
+  // Connect in STA mode the whole time (no AP, so no brownout).
+  WiFi.persistent(true);
+  WiFi.mode(WIFI_STA);
+  wifi_config_t conf;
+  memset(&conf, 0, sizeof(conf));
+  esp_wifi_get_config(WIFI_IF_STA, &conf);
 
-  bool ok;
-  if (wm.getWiFiIsSaved()) {
-    // Operator/prior creds in NVS — use WiFiManager's robust connect path.
-    ok = wm.autoConnect(AP_NAME);
-  } else {
-    // First boot: join the factory default directly in STA mode with a generous
-    // timeout. WiFiManager ignores a seeded WiFi.begin ("No wifi saved,
-    // skipping") and would start the power-hungry AP, so we connect ourselves
-    // and stay in STA the whole time (no AP, no brownout). WiFi.persistent
-    // saves the creds, so later boots take the fast saved-creds path above.
-    Serial.printf("[net] no saved creds; joining default \"%s\" (up to 35s)\n", DEFAULT_WIFI_SSID);
-    WiFi.persistent(true);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 35000) {
-      delay(250);
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-      ok = true;
-    } else {
-      Serial.println("[net] default join failed; opening config portal");
-      ok = wm.autoConnect(AP_NAME);
-    }
+  bool haveSaved = conf.sta.ssid[0] != '\0';
+  const char* ssid = haveSaved ? (const char*)conf.sta.ssid     : DEFAULT_WIFI_SSID;
+  const char* pass = haveSaved ? (const char*)conf.sta.password : DEFAULT_WIFI_PASS;
+  Serial.printf("[net] joining \"%s\" (%s, up to 35s)\n",
+                ssid, haveSaved ? "saved" : "default");
+
+  WiFi.begin(ssid, pass);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 35000) {
+    delay(250);
+  }
+
+  bool ok = (WiFi.status() == WL_CONNECTED);
+  if (!ok) {
+    Serial.println("[net] join failed; opening config portal");
+    ok = wm.autoConnect(AP_NAME);   // operator picks a network; persists for next boot
   }
 
   // Persist any operator edits to group/port.
