@@ -4,7 +4,12 @@
 #include "sound_map.h"
 #include <Arduino.h>
 #include <LittleFS.h>
-#include <ESP_I2S.h>
+// arduino-esp32 2.x I2S: bundled I2S library (no ESP_I2S.h; that's 3.x only).
+// Constructor: I2SClass(deviceIndex, clockGenerator, sdPin, sckPin, fsPin)
+//   sdPin  = data out  = PIN_I2S_DIN  (25)
+//   sckPin = bit clock = PIN_I2S_BCLK (27)
+//   fsPin  = word sel  = PIN_I2S_LRC  (26)
+#include <I2S.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -17,7 +22,8 @@ struct PlayReq {
   uint8_t repeat;
 };
 
-I2SClass    i2s;
+// I2SClass global: pins wired at construction for MAX98357A (Philips/I2S standard).
+I2SClass    i2s(0, 0, PIN_I2S_DIN, PIN_I2S_BCLK, PIN_I2S_LRC);
 QueueHandle_t g_queue = nullptr;   // length 1; newest request preempts
 bool g_i2s_started = false;
 
@@ -35,9 +41,9 @@ void play_file(const PlayReq& req) {
   }
 
   if (g_i2s_started) i2s.end();
-  i2s.setPins(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
-  i2s.begin(I2S_MODE_STD, w.sample_rate, I2S_DATA_BIT_WIDTH_16BIT,
-            I2S_SLOT_MODE_MONO);
+  // I2S_PHILIPS_MODE is standard left-justified I2S, correct for MAX98357A.
+  // 16-bit mono WAV; driver handles frame format internally.
+  i2s.begin(I2S_PHILIPS_MODE, (int)w.sample_rate, 16);
   g_i2s_started = true;
 
   for (uint8_t rep = 0; rep < req.repeat; rep++) {
@@ -51,7 +57,7 @@ void play_file(const PlayReq& req) {
       if (got == 0) break;
       size_t samples = got / 2;
       for (size_t i = 0; i < samples; i++) buf[i] = wav_scale_sample(buf[i], req.volume);
-      i2s.write((uint8_t*)buf, samples * 2);
+      i2s.write((const void*)buf, samples * 2);
       remaining -= got;
     }
   }
