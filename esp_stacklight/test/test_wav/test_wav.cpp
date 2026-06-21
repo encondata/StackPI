@@ -47,6 +47,9 @@ void test_volume_scaling(void) {
   TEST_ASSERT_EQUAL_INT16(500,  wav_scale_sample(1000, 50));   // half
   TEST_ASSERT_EQUAL_INT16(0,    wav_scale_sample(1000, 0));    // mute
   TEST_ASSERT_EQUAL_INT16(-250, wav_scale_sample(-1000, 25));  // negative preserved
+  TEST_ASSERT_EQUAL_INT16(2000, wav_scale_sample(1000, 200));  // 2x overdrive, no clip
+  TEST_ASSERT_EQUAL_INT16(32767, wav_scale_sample(20000, 200)); // overdrive clips +max
+  TEST_ASSERT_EQUAL_INT16(-32768, wav_scale_sample(-20000, 200)); // overdrive clips -min
 }
 
 void test_sound_map(void) {

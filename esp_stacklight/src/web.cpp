@@ -25,8 +25,8 @@ input[type=range]{width:170px;vertical-align:middle}
 <h2>Brightness <span id=b>80</span>%</h2>
 <input type=range id=br min=0 max=100 value=80 oninput="b.textContent=this.value">
 <h2>Lights</h2><div id=lights></div>
-<h2>Volume <span id=v>80</span>%</h2>
-<input type=range id=vol min=0 max=100 value=80 oninput="v.textContent=this.value">
+<h2>Volume <span id=v>100</span>% <small>(&gt;100 = overdrive, may distort)</small></h2>
+<input type=range id=vol min=0 max=255 value=100 oninput="v.textContent=this.value">
 <h2>Sound</h2><div class=row>
 <button class=g onclick="snd('alert')">Alert</button>
 <button class=g onclick="snd('error')">Error</button>

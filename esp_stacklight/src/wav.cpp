@@ -34,6 +34,9 @@ WavInfo wav_parse_header(const uint8_t* buf, size_t len) {
 }
 
 int16_t wav_scale_sample(int16_t s, uint8_t volume) {
-  if (volume >= 100) return s;
-  return (int16_t)((int32_t)s * (int32_t)volume / 100);
+  if (volume == 100) return s;
+  int32_t v = (int32_t)s * (int32_t)volume / 100;   // <100 attenuates, >100 boosts
+  if (v > 32767)  v = 32767;                         // hard-clip on overdrive
+  if (v < -32768) v = -32768;
+  return (int16_t)v;
 }

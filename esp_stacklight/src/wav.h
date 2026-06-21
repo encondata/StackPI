@@ -12,4 +12,5 @@ struct WavInfo {
 };
 
 WavInfo wav_parse_header(const uint8_t* buf, size_t len);
-int16_t wav_scale_sample(int16_t sample, uint8_t volume);  // volume 0..100
+// volume 0..255: <100 attenuates, 100 = unity, >100 overdrives (hard-clipped).
+int16_t wav_scale_sample(int16_t sample, uint8_t volume);

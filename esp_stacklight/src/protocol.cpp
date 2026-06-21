@@ -59,7 +59,7 @@ ParsedMessage parse_message(const char* json, size_t len) {
     if (snd[0] == '\0') return m;                   // empty id -> ignore
     strncpy(m.sound.sound, snd, 40);
     m.sound.sound[40]    = '\0';
-    m.sound.volume       = clamp_u8(doc["volume"] | 100, 0, 100);
+    m.sound.volume       = clamp_u8(doc["volume"] | 100, 0, 255);  // >100 = overdrive
     m.sound.duration_ms  = clamp_duration(doc["duration"] | 400);
     m.sound.repeat_count = clamp_u8(doc["repeat_count"] | 1, 1, 5);
     m.kind = MsgKind::Sound;
