@@ -249,6 +249,8 @@ async def _run() -> None:
 
     last_sent: Optional[Dict[str, Any]] = None  # what receivers should now hold
     last_keyframe = 0.0
+    last_reader_state: Optional[str] = None      # last reader light we sent
+    last_reader_kf = 0.0
     while True:
         try:
             try:
@@ -256,36 +258,49 @@ async def _run() -> None:
             except asyncio.TimeoutError:
                 pass  # heartbeat tick
             _dirty.clear()
-
-            if not status_enabled():
-                last_sent = None  # force a fresh keyframe when re-enabled
-                await asyncio.sleep(DEBOUNCE_SEC)
-                continue
-
-            current = await loop.run_in_executor(None, build_snapshot)
-            group, port = status_target()
             now = loop.time()
 
-            if last_sent is None or (now - last_keyframe) >= KEYFRAME_SEC:
-                # Keyframe: the full snapshot, so cold-started / lossy receivers
-                # re-sync. (build_snapshot already stamps v/type/ts.)
-                msg = dict(current)
-                msg["kind"] = "full"
-                notifier._emit(msg, group, port)
-                last_sent = current
-                last_keyframe = now
-            else:
-                delta = _diff(current, last_sent)
-                if delta:  # nothing changed → nothing on the wire
-                    delta.update({
-                        "v": SCHEMA_VERSION,
-                        "type": "status",
-                        "kind": "delta",
-                        "ts": current.get("ts"),
-                        "uptime": current.get("uptime"),
-                    })
-                    notifier._emit(delta, group, port)
+            # --- display status broadcast (gated by its own enable) ----------
+            reader_state: Optional[str] = None
+            if status_enabled():
+                current = await loop.run_in_executor(None, build_snapshot)
+                reader_state = (current.get("reader") or {}).get("state")
+                group, port = status_target()
+                if last_sent is None or (now - last_keyframe) >= KEYFRAME_SEC:
+                    # Keyframe: the full snapshot, so cold-started / lossy
+                    # receivers re-sync. (build_snapshot stamps v/type/ts.)
+                    msg = dict(current)
+                    msg["kind"] = "full"
+                    notifier._emit(msg, group, port)
                     last_sent = current
+                    last_keyframe = now
+                else:
+                    delta = _diff(current, last_sent)
+                    if delta:  # nothing changed → nothing on the wire
+                        delta.update({
+                            "v": SCHEMA_VERSION,
+                            "type": "status",
+                            "kind": "delta",
+                            "ts": current.get("ts"),
+                            "uptime": current.get("uptime"),
+                        })
+                        notifier._emit(delta, group, port)
+                        last_sent = current
+            else:
+                last_sent = None  # force a fresh keyframe when re-enabled
+
+            # --- reader traffic-light → stack light (its own enable) ---------
+            # Independent of the display broadcast: drive the stack light on a
+            # state change, and re-send on the 30s keyframe so a just-powered-on
+            # light re-syncs. Reuse the snapshot's reader state when we have it.
+            if reader_state is None:
+                reader_state = await loop.run_in_executor(None, _active_reader_state)
+            reader_kf = (now - last_reader_kf) >= KEYFRAME_SEC
+            if reader_state is not None and (reader_state != last_reader_state or reader_kf):
+                await loop.run_in_executor(None, notifier.send_reader_light, reader_state)
+                last_reader_state = reader_state
+                if reader_kf:
+                    last_reader_kf = now
 
             await asyncio.sleep(DEBOUNCE_SEC)  # collapse a burst into one send
         except asyncio.CancelledError:
@@ -294,6 +309,17 @@ async def _run() -> None:
         except Exception as e:  # pragma: no cover - loop must never die
             log.warning("status broadcast cycle failed: %s", e)
             await asyncio.sleep(HEARTBEAT_SEC)
+
+
+def _active_reader_state() -> Optional[str]:
+    """The active reader's traffic-light state (offline/degraded/online/reading),
+    or None. Used to drive the stack light independently of the display snapshot."""
+    try:
+        from app.rfid import get_active_reader  # noqa: PLC0415
+        ar = get_active_reader()
+        return ar.get("state") if isinstance(ar, dict) else None
+    except Exception:  # pragma: no cover - best effort
+        return None
 
 
 def start() -> "asyncio.Task":

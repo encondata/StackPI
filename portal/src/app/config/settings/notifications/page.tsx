@@ -17,6 +17,7 @@ export default function NotificationsPage() {
   const [enabled, setEnabled] = useState(true);
   const [group, setGroup] = useState("239.10.10.10");
   const [port, setPort] = useState("5005");
+  const [readerLight, setReaderLight] = useState(true);
   const [savingCfg, setSavingCfg] = useState(false);
   const [cfgBanner, setCfgBanner] = useState<Banner>(null);
 
@@ -55,11 +56,13 @@ export default function NotificationsPage() {
             enabled: boolean;
             multicast_group: string;
             multicast_port: number;
+            reader_light_enabled?: boolean;
           };
           if (active) {
             setEnabled(d.enabled);
             setGroup(d.multicast_group);
             setPort(String(d.multicast_port));
+            setReaderLight(d.reader_light_enabled ?? true);
           }
         }
         const sr = await fetch("/local/notify/status-config", { cache: "no-store" });
@@ -101,6 +104,7 @@ export default function NotificationsPage() {
           enabled,
           multicast_group: group.trim(),
           multicast_port: Number(port),
+          reader_light_enabled: readerLight,
         }),
       });
       const b = (await r.json().catch(() => null)) as { detail?: string } | null;
@@ -229,6 +233,10 @@ export default function NotificationsPage() {
         <label className="mt-4 flex items-center gap-2 text-sm text-zinc-700">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enable event-driven notifications (bad-tag / status). Test buttons always send.
+        </label>
+        <label className="mt-2 flex items-center gap-2 text-sm text-zinc-700">
+          <input type="checkbox" checked={readerLight} onChange={(e) => setReaderLight(e.target.checked)} />
+          Mirror the RFID reader traffic light to the stack light (solid red/yellow/blue/green).
         </label>
         {cfgBanner && <BannerLine b={cfgBanner} />}
         <div className="mt-4">

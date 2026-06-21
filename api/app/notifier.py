@@ -20,7 +20,7 @@ import ipaddress
 import json
 import logging
 import socket
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -36,10 +36,22 @@ MULTICAST_TTL = 1  # LAN-local; stack lights sit on the same segment.
 KEY_ENABLE = "notify_enable"
 KEY_GROUP = "notify_multicast_group"
 KEY_PORT = "notify_multicast_port"
+KEY_READER_LIGHT_ENABLE = "notify_reader_light_enable"
 
 DEFAULT_GROUP = "239.10.10.10"
 DEFAULT_PORT = 5005
 DURATION_MAX_MS = 600_000  # 10 min — a sanity ceiling, not a real limit
+
+# Reader traffic-light → stack light. A SOLID light per state (the firmware holds
+# solid indefinitely), colored to match the on-screen reader light. Driven by the
+# status broadcaster on change + the 30s keyframe. unconfigured → off (brightness 0).
+READER_LIGHT_BY_STATE = {
+    "offline":  {"pattern": "solid", "color": "red"},
+    "degraded": {"pattern": "solid", "color": "yellow"},
+    "reading":  {"pattern": "solid", "color": "green"},
+    "online":   {"pattern": "solid", "color": "blue"},
+}
+READER_LIGHT_BRIGHTNESS = 80
 
 
 def _get_int(key: str, default: int, lo: int, hi: int) -> int:
@@ -54,6 +66,30 @@ def _get_str(key: str, default: str) -> str:
 
 def _enabled() -> bool:
     return _get_int(KEY_ENABLE, 1, 0, 1) == 1
+
+
+def _reader_light_enabled() -> bool:
+    return _get_int(KEY_READER_LIGHT_ENABLE, 1, 0, 1) == 1
+
+
+def reader_light_message(state: Optional[str]) -> "LightMessage":
+    """The solid LightMessage for a reader traffic-light state. Unknown /
+    unconfigured → off (solid, brightness 0) so the stack light clears."""
+    spec = READER_LIGHT_BY_STATE.get(state or "")
+    if spec is None:
+        return LightMessage(pattern="solid", color="blue", brightness=0, duration=1000, repeat_count=1)
+    return LightMessage(
+        pattern=spec["pattern"], color=spec["color"],
+        brightness=READER_LIGHT_BRIGHTNESS, duration=1000, repeat_count=1,
+    )
+
+
+def send_reader_light(state: Optional[str]) -> bool:
+    """Multicast the reader traffic-light as a stack-light message. Gated by the
+    master notify-enable AND the reader-light toggle. Best-effort."""
+    if not _enabled() or not _reader_light_enabled():
+        return False
+    return _emit(_light_payload(reader_light_message(state)), *_notify_target())
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +176,7 @@ def get_config() -> dict:
         "enabled": _enabled(),
         "multicast_group": _get_str(KEY_GROUP, DEFAULT_GROUP),
         "multicast_port": _get_int(KEY_PORT, DEFAULT_PORT, 1, 65535),
+        "reader_light_enabled": _reader_light_enabled(),
         "group_default": DEFAULT_GROUP,
         "port_default": DEFAULT_PORT,
     }
@@ -149,6 +186,7 @@ class NotifyConfigRequest(BaseModel):
     enabled: bool
     multicast_group: str = Field(min_length=7, max_length=15)
     multicast_port: int = Field(ge=1, le=65535)
+    reader_light_enabled: bool = True
 
 
 @router.post("/config")
@@ -167,6 +205,7 @@ def set_config(body: NotifyConfigRequest) -> dict:
         _persist_setting(KEY_ENABLE, "1" if body.enabled else "0")
         and _persist_setting(KEY_GROUP, body.multicast_group)
         and _persist_setting(KEY_PORT, str(int(body.multicast_port)))
+        and _persist_setting(KEY_READER_LIGHT_ENABLE, "1" if body.reader_light_enabled else "0")
     )
     if not ok:
         raise HTTPException(status_code=500, detail="failed to persist notify config")
