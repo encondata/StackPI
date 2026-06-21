@@ -6,79 +6,109 @@ multicast and serves it back to a local kiosk browser by EMULATING the handful
 of /local/* endpoints (and SSE streams) that the reused portal /status + /trucks
 pages call — so those pages run unchanged, just pointed at this localhost server.
 
-stdlib only (no pip): socket + http.server + threading. Config from
-/etc/stackpi-display/config.json (see config.example.json).
+Also serves a tiny on-device setup page at /setup (Wi-Fi + multicast/screen
+config) so the display can be configured without SSH.
 
-See ../display/status-protocol.md for the snapshot schema.
+stdlib only (no pip): socket + http.server + threading + nmcli. Config in
+/etc/stackpi-display/config.json (csg-writable; see config.example.json).
+See status-protocol.md for the snapshot schema.
 """
 import json
 import logging
 import os
 import socket
 import struct
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("stackpi.display.receiver")
 
 CONFIG_PATH = os.environ.get("STACKPI_DISPLAY_CONFIG", "/etc/stackpi-display/config.json")
+SETUP_HTML = os.environ.get("STACKPI_DISPLAY_SETUP", "/opt/stackpi-display/setup.html")
 DEFAULTS = {
     "multicast_group": "239.10.10.11",
     "multicast_port": 5006,
     "http_port": 8080,
-    "web_dir": "/opt/stackpi-display/web",  # the exported portal (/status, /trucks, _next)
+    "web_dir": "/opt/stackpi-display/web",
+    "screen": "status",
 }
 
+# Live config (group/port can change at runtime via /api/config).
+CONFIG: Dict[str, Any] = dict(DEFAULTS)
+_cfg_lock = threading.Lock()
+_listen_sock: Optional[socket.socket] = None  # closed to force a rejoin
 
-def load_config() -> Dict[str, Any]:
-    cfg = dict(DEFAULTS)
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as fh:
-            cfg.update(json.load(fh))
-    except (OSError, ValueError) as e:
-        log.warning("config %s not loaded (%s); using defaults", CONFIG_PATH, e)
-    return cfg
+
+def load_config() -> None:
+    with _cfg_lock:
+        CONFIG.clear()
+        CONFIG.update(DEFAULTS)
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as fh:
+                CONFIG.update(json.load(fh))
+        except (OSError, ValueError) as e:
+            log.warning("config %s not loaded (%s); using defaults", CONFIG_PATH, e)
+
+
+def cfg(key: str) -> Any:
+    with _cfg_lock:
+        return CONFIG.get(key, DEFAULTS.get(key))
+
+
+def save_config(updates: Dict[str, Any]) -> None:
+    """Merge updates into the config file and re-join multicast if the
+    group/port changed (no process restart)."""
+    with _cfg_lock:
+        CONFIG.update(updates)
+        snapshot = dict(CONFIG)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh, indent=2)
+    # Force the listener to rebind with the new group/port.
+    global _listen_sock
+    if _listen_sock is not None:
+        try:
+            _listen_sock.close()
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
-# Latest-snapshot store (written by the multicast thread, read by HTTP)
+# Latest-snapshot store
 # ---------------------------------------------------------------------------
 
 class SnapshotStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._snap: Dict[str, Any] = {}
-        self._received_at: float = 0.0
 
     def set(self, snap: Dict[str, Any]) -> None:
         with self._lock:
             self._snap = snap
-            self._received_at = time.time()
 
     def get(self) -> Dict[str, Any]:
         with self._lock:
             return self._snap
 
-    def age(self) -> float:
-        with self._lock:
-            return time.time() - self._received_at if self._received_at else 1e9
-
 
 STORE = SnapshotStore()
 
 
-def multicast_listener(group: str, port: int) -> None:
-    """Join the multicast group and feed every status datagram into STORE.
-    Reconnects on error. Runs forever in its own thread."""
+def multicast_listener() -> None:
+    """Join the configured multicast group and feed status datagrams into STORE.
+    Rebinds when the config changes (save_config closes the socket) or on error."""
+    global _listen_sock
     while True:
+        group, port = cfg("multicast_group"), int(cfg("multicast_port"))
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("", port))
             mreq = struct.pack("4sl", socket.inet_aton(group), socket.INADDR_ANY)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            _listen_sock = sock
             log.info("listening for status snapshots on %s:%s", group, port)
             while True:
                 data, _addr = sock.recvfrom(65535)
@@ -89,8 +119,9 @@ def multicast_listener(group: str, port: int) -> None:
                 if isinstance(msg, dict) and msg.get("type") == "status":
                     STORE.set(msg)
         except OSError as e:
-            log.warning("multicast listener error: %s; retrying in 3s", e)
-            time.sleep(3)
+            # save_config closed the socket → rebind with new group/port.
+            log.info("multicast listener rebinding (%s)", e)
+            time.sleep(1)
 
 
 # ---------------------------------------------------------------------------
@@ -98,14 +129,10 @@ def multicast_listener(group: str, port: int) -> None:
 # ---------------------------------------------------------------------------
 
 def _readers_from_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
-    """Synthesize the /local/rfid/readers payload from the snapshot's reader
-    summary so the /status traffic light renders. Best-effort shape."""
     r = snap.get("reader") or {}
     state = r.get("state")
     if not r.get("name"):
         return {"readers": []}
-    # The page derives red/yellow/blue/green from last_error/last_status; we
-    # already have the derived state, so map it back to a minimal status object.
     last_status: Optional[Dict[str, Any]] = None
     last_error: Optional[str] = None
     if state == "offline":
@@ -116,22 +143,14 @@ def _readers_from_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
         last_status = {"radioActivity": "inactive", "interfaceConnectionStatus": {"data": [{"connectionStatus": "connected" if state == "online" else "disconnected"}]}}
     return {
         "readers": [
-            {
-                "id": 1,
-                "name": r.get("name"),
-                "enabled": True,
-                "last_error": last_error,
-                "last_status": last_status,
-                "last_status_at": snap.get("ts"),
-            }
+            {"id": 1, "name": r.get("name"), "enabled": True,
+             "last_error": last_error, "last_status": last_status,
+             "last_status_at": snap.get("ts")}
         ]
     }
 
 
 def emulate(path: str) -> Optional[Any]:
-    """Return the emulated JSON body for a /local/* GET path, or None if we
-    don't emulate it (caller 404s / stubs). Driven entirely by the latest
-    snapshot; missing pieces fall back to sensible empties so the pages render."""
     snap = STORE.get()
     if path == "/local/metrics":
         return snap.get("metrics") or {}
@@ -140,10 +159,7 @@ def emulate(path: str) -> Optional[Any]:
         return {"registration": reg, "status": reg.get("status", "unknown")}
     if path == "/local/rfid/readers":
         return _readers_from_snapshot(snap)
-    if path in ("/local/settings", "/local/rfid/settings"):
-        return {}  # display has no local settings; pages default
-    if path == "/local/settings/screen-status":
-        # Animations/borders off on the display; pages fall back to defaults.
+    if path in ("/local/settings", "/local/rfid/settings", "/local/settings/screen-status"):
         return {}
     return None
 
@@ -156,12 +172,59 @@ SSE_PATHS = {
 
 
 # ---------------------------------------------------------------------------
-# HTTP server: static export + emulated endpoints + SSE
+# nmcli helpers (Wi-Fi setup)
+# ---------------------------------------------------------------------------
+
+def _nmcli(args: List[str], timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(["nmcli", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def wifi_scan() -> List[dict]:
+    try:
+        p = _nmcli(["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "auto"])
+    except (subprocess.SubprocessError, OSError):
+        return []
+    seen, out = set(), []
+    for line in p.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) < 4:
+            continue
+        ssid = parts[1].strip()
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        out.append({"in_use": parts[0] == "*", "ssid": ssid, "signal": parts[2], "security": parts[3]})
+    return out
+
+
+def wifi_connect(ssid: str, password: str) -> Dict[str, Any]:
+    args = ["device", "wifi", "connect", ssid]
+    if password:
+        args += ["password", password]
+    try:
+        p = _nmcli(args, timeout=45)
+    except (subprocess.SubprocessError, OSError) as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": p.returncode == 0, "output": (p.stdout or p.stderr).strip()[:300]}
+
+
+def net_status() -> Dict[str, Any]:
+    try:
+        p = _nmcli(["-t", "-f", "TYPE,STATE,CONNECTION", "device", "status"])
+        ip = _nmcli(["-t", "-f", "IP4.ADDRESS", "device", "show"])
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    devices = [dict(zip(("type", "state", "connection"), ln.split(":")[:3]))
+               for ln in p.stdout.splitlines() if ln]
+    addrs = [ln.split(":", 1)[1] for ln in ip.stdout.splitlines() if ln.startswith("IP4.ADDRESS")]
+    return {"devices": devices, "addresses": addrs}
+
+
+# ---------------------------------------------------------------------------
+# HTTP server
 # ---------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
-    web_dir = DEFAULTS["web_dir"]
-
     def log_message(self, *a):  # quiet
         pass
 
@@ -174,28 +237,77 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _read_json(self) -> Dict[str, Any]:
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        if not n:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n).decode("utf-8"))
+        except ValueError:
+            return {}
+
+    # --- GET ---------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-
+        if path in ("/setup", "/setup/"):
+            self._send_file(SETUP_HTML, "text/html; charset=utf-8")
+            return
+        if path == "/api/config":
+            with _cfg_lock:
+                self._json(dict(CONFIG))
+            return
+        if path == "/api/wifi/scan":
+            self._json({"networks": wifi_scan()})
+            return
+        if path == "/api/net":
+            self._json(net_status())
+            return
         if path in SSE_PATHS:
             self._sse(SSE_PATHS[path])
             return
         if path.startswith("/local/"):
             body = emulate(path)
-            self._json(body if body is not None else {}, 200 if body is not None else 200)
+            self._json(body if body is not None else {})
             return
         self._static(path)
+
+    # --- POST --------------------------------------------------------------
+    def do_POST(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        body = self._read_json()
+        if path == "/api/config":
+            updates: Dict[str, Any] = {}
+            if "multicast_group" in body:
+                grp = str(body["multicast_group"])
+                try:
+                    if not _is_multicast(grp):
+                        raise ValueError
+                except ValueError:
+                    self._json({"ok": False, "error": "group must be IPv4 multicast"}, 400)
+                    return
+                updates["multicast_group"] = grp
+            if "multicast_port" in body:
+                updates["multicast_port"] = int(body["multicast_port"])
+            if body.get("screen") in ("status", "trucks"):
+                updates["screen"] = body["screen"]
+            try:
+                save_config(updates)
+            except OSError as e:
+                self._json({"ok": False, "error": f"could not write config: {e}"}, 500)
+                return
+            self._json({"ok": True, "config": dict(CONFIG)})
+            return
+        if path == "/api/wifi/connect":
+            self._json(wifi_connect(str(body.get("ssid", "")), str(body.get("password", ""))))
+            return
+        self.send_error(404)
 
     def _sse(self, field: str) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
-            # Send the current items once, then keepalive. (Cards stay live via
-            # the page's polling of /local/metrics; richer live-append is a
-            # follow-up.)
             for item in (STORE.get().get(field) or []):
                 self.wfile.write(f"data: {json.dumps(item)}\n\n".encode("utf-8"))
             self.wfile.flush()
@@ -207,26 +319,23 @@ class Handler(BaseHTTPRequestHandler):
             return
 
     def _static(self, path: str) -> None:
-        # Map a route to a file in the exported portal. Next export writes
-        # /status.html (or /status/index.html); try both, default to index.html.
+        web_dir = os.path.normpath(cfg("web_dir"))
         rel = path.lstrip("/") or "index.html"
         candidates = [rel]
         if not os.path.splitext(rel)[1]:
             candidates += [rel + ".html", os.path.join(rel, "index.html")]
         for c in candidates:
-            fp = os.path.normpath(os.path.join(self.web_dir, c))
-            if fp.startswith(self.web_dir) and os.path.isfile(fp):
+            fp = os.path.normpath(os.path.join(web_dir, c))
+            if fp.startswith(web_dir) and os.path.isfile(fp):
                 self._send_file(fp)
                 return
-        # SPA-ish fallback to status
-        fallback = os.path.join(self.web_dir, "status.html")
+        fallback = os.path.join(web_dir, "status.html")
         if os.path.isfile(fallback):
             self._send_file(fallback)
             return
         self.send_error(404)
 
-    def _send_file(self, fp: str) -> None:
-        ctype = _content_type(fp)
+    def _send_file(self, fp: str, ctype: Optional[str] = None) -> None:
         try:
             with open(fp, "rb") as fh:
                 data = fh.read()
@@ -234,40 +343,35 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.send_response(200)
-        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Type", ctype or _content_type(fp))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
 
+def _is_multicast(ip: str) -> bool:
+    try:
+        first = int(ip.split(".")[0])
+        return 224 <= first <= 239 and ip.count(".") == 3
+    except (ValueError, IndexError):
+        return False
+
+
 def _content_type(fp: str) -> str:
     ext = os.path.splitext(fp)[1].lower()
     return {
-        ".html": "text/html; charset=utf-8",
-        ".js": "text/javascript",
-        ".css": "text/css",
-        ".json": "application/json",
-        ".png": "image/png",
-        ".svg": "image/svg+xml",
-        ".woff2": "font/woff2",
-        ".ico": "image/x-icon",
+        ".html": "text/html; charset=utf-8", ".js": "text/javascript",
+        ".css": "text/css", ".json": "application/json", ".png": "image/png",
+        ".svg": "image/svg+xml", ".woff2": "font/woff2", ".ico": "image/x-icon",
     }.get(ext, "application/octet-stream")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    cfg = load_config()
-    Handler.web_dir = os.path.normpath(cfg["web_dir"])
-
-    t = threading.Thread(
-        target=multicast_listener,
-        args=(cfg["multicast_group"], int(cfg["multicast_port"])),
-        daemon=True,
-    )
-    t.start()
-
-    httpd = ThreadingHTTPServer(("127.0.0.1", int(cfg["http_port"])), Handler)
-    log.info("serving %s on http://127.0.0.1:%s", cfg["web_dir"], cfg["http_port"])
+    load_config()
+    threading.Thread(target=multicast_listener, daemon=True).start()
+    httpd = ThreadingHTTPServer(("0.0.0.0", int(cfg("http_port"))), Handler)
+    log.info("serving on http://0.0.0.0:%s (kiosk + /setup)", cfg("http_port"))
     httpd.serve_forever()
 
 

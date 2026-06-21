@@ -68,10 +68,13 @@ ok "exported portal → $APP_DIR/web"
 # --- 4. receiver + config + units ------------------------------------------
 info "Installing the receiver + config + services"
 sudo install -m 0755 "$TARGET_DIR/display/receiver.py" "$APP_DIR/receiver.py"
+sudo install -m 0644 "$TARGET_DIR/display/setup.html" "$APP_DIR/setup.html"
 sudo install -d -m 0755 "$CFG_DIR"
 if [[ ! -f "$CFG_DIR/config.json" ]]; then
   sudo install -m 0644 "$TARGET_DIR/display/config.example.json" "$CFG_DIR/config.json"
 fi
+# The receiver (runs as the kiosk user) rewrites config.json from the /setup page.
+sudo chown "$KIOSK_USER:$KIOSK_USER" "$CFG_DIR/config.json"
 sudo install -m 0644 "$TARGET_DIR/display/sway-display.conf" /etc/stackpi-display/sway-display.conf
 sudo install -m 0755 "$TARGET_DIR/display/display-kiosk-launch.sh" /usr/local/bin/display-kiosk-launch.sh
 sudo cp "$TARGET_DIR/display/"*.service /etc/systemd/system/

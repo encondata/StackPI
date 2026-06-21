@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StackPI Display — Setup</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#0d0d12; color:#e4e4e7; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; } h2 { font-size: 14px; text-transform: uppercase; letter-spacing:.1em; color:#a1a1aa; margin: 28px 0 10px; }
+  .card { background:#18181b; border:1px solid #27272a; border-radius:12px; padding:16px; }
+  label { display:block; font-size:12px; color:#a1a1aa; margin-top:10px; }
+  input, select { width:100%; box-sizing:border-box; margin-top:4px; padding:8px 10px; border-radius:8px;
+    border:1px solid #3f3f46; background:#111114; color:#e4e4e7; font-size:14px; }
+  button { margin-top:14px; padding:8px 16px; border:0; border-radius:8px; background:#2563eb; color:#fff; font-weight:600; font-size:14px; cursor:pointer; }
+  button.sec { background:#27272a; }
+  .row { display:flex; gap:8px; align-items:center; justify-content:space-between; padding:8px 0; border-top:1px solid #27272a; }
+  .row:first-child { border-top:0; }
+  .msg { margin-top:12px; font-size:13px; padding:8px 10px; border-radius:8px; }
+  .ok { background:#052e1f; color:#86efac; } .err { background:#3b0a0a; color:#fca5a5; }
+  .mono { font-family: ui-monospace, monospace; font-size:12px; color:#a1a1aa; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>StackPI Display — Setup</h1>
+
+  <h2>Network</h2>
+  <div class="card">
+    <div id="net" class="mono">…</div>
+    <button class="sec" onclick="scan()">Scan Wi-Fi</button>
+    <div id="wifi"></div>
+    <label>Password (for the selected network)</label>
+    <input id="pw" type="password" placeholder="leave blank for open networks" />
+    <div id="wifiMsg"></div>
+  </div>
+
+  <h2>Display</h2>
+  <div class="card">
+    <label>Multicast group</label>
+    <input id="group" />
+    <label>Multicast port</label>
+    <input id="port" type="number" />
+    <label>Screen</label>
+    <select id="screen"><option value="status">status</option><option value="trucks">trucks</option></select>
+    <button onclick="saveCfg()">Save</button>
+    <div id="cfgMsg"></div>
+  </div>
+</div>
+
+<script>
+let selectedSsid = "";
+async function j(url, opts){ const r = await fetch(url, opts); return { ok:r.ok, body: await r.json().catch(()=>({})) }; }
+
+async function loadNet(){
+  const { body } = await j("/api/net");
+  const ips = (body.addresses||[]).join(", ") || "—";
+  document.getElementById("net").textContent = "IP: " + ips;
+}
+async function scan(){
+  document.getElementById("wifi").innerHTML = "<div class='mono'>scanning…</div>";
+  const { body } = await j("/api/wifi/scan");
+  const nets = body.networks||[];
+  document.getElementById("wifi").innerHTML = nets.length ? nets.map(n =>
+    `<div class="row"><span>${n.in_use?"● ":""}${escapeHtml(n.ssid)} <span class="mono">${n.signal}% ${escapeHtml(n.security||"")}</span></span>
+     <button class="sec" onclick="connect('${escapeAttr(n.ssid)}')">Connect</button></div>`).join("") : "<div class='mono'>no networks found</div>";
+}
+async function connect(ssid){
+  selectedSsid = ssid;
+  const pw = document.getElementById("pw").value;
+  msg("wifiMsg", "connecting to " + ssid + "…");
+  const { body } = await j("/api/wifi/connect", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ssid, password: pw }) });
+  msg("wifiMsg", body.ok ? ("Connected to " + ssid + ".") : ("Failed: " + (body.output||body.error||"")), body.ok);
+  loadNet();
+}
+async function loadCfg(){
+  const { body } = await j("/api/config");
+  document.getElementById("group").value = body.multicast_group||"";
+  document.getElementById("port").value = body.multicast_port||"";
+  document.getElementById("screen").value = body.screen||"status";
+}
+async function saveCfg(){
+  const payload = { multicast_group: document.getElementById("group").value.trim(),
+                    multicast_port: Number(document.getElementById("port").value),
+                    screen: document.getElementById("screen").value };
+  const { body, ok } = await j("/api/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+  msg("cfgMsg", ok ? "Saved." : ("Failed: " + (body.error||"")), ok);
+}
+function msg(id, text, ok){ const e=document.getElementById(id); e.className="msg "+(ok===undefined?"":ok?"ok":"err"); e.textContent=text; }
+function escapeHtml(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function escapeAttr(s){ return (s||"").replace(/'/g,"\\'"); }
+loadNet(); loadCfg();
+</script>
+</body>
+</html>

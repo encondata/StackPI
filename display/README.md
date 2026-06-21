@@ -39,12 +39,18 @@ never talks to the primary.
 | `stackpi-display-kiosk.service` + `sway-display.conf` + `display-kiosk-launch.sh` | the kiosk |
 | `status-protocol.md` | the shared wire spec (also used by the primary sender) |
 
-## Config
+## Config — on-device setup page
 
-`/etc/stackpi-display/config.json` — set `multicast_group`/`multicast_port` to
-match the primary's **Status broadcast** settings, `screen` to `status` or
-`trucks`, and `http_port` if needed. Restart `stackpi-display` after edits.
-Wi-Fi is set up with `nmcli` (a small web `/config` is a planned follow-up).
+Open **`http://<display-ip>:8080/setup`** (from any browser on the LAN, or the
+display itself) to:
+- **Wi-Fi:** scan + connect (`nmcli`).
+- **Multicast group/port** (match the primary's Status broadcast) and **screen**
+  (`status` / `trucks`). Saving rewrites `/etc/stackpi-display/config.json` and
+  the receiver re-joins the new multicast group live (no restart). A `screen`
+  change takes effect on the next kiosk start/reboot.
+
+The config file is also editable directly at `/etc/stackpi-display/config.json`
+(`web_dir`, `http_port`).
 
 ## First-cut notes (validate on the Pi)
 
