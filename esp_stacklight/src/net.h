@@ -1,5 +1,6 @@
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 
 enum class NetState : uint8_t { Portal, Connecting, Connected, Disconnected };
 
