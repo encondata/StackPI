@@ -4,6 +4,7 @@
 #include "sound_map.h"
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <string.h>
 // arduino-esp32 2.x I2S: bundled I2S library (no ESP_I2S.h; that's 3.x only).
 // Constructor: I2SClass(deviceIndex, clockGenerator, sdPin, sckPin, fsPin)
 //   sdPin  = data out  = PIN_I2S_DIN  (25)
@@ -27,14 +28,51 @@ I2SClass    i2s(0, 0, PIN_I2S_DIN, PIN_I2S_BCLK, PIN_I2S_LRC);
 QueueHandle_t g_queue = nullptr;   // length 1; newest request preempts
 bool g_i2s_started = false;
 
+static uint32_t le32(const uint8_t* p) {
+  return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static uint16_t le16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+
+// Walk the RIFF chunks directly from the file, skipping any chunk that isn't
+// fmt/data (e.g. Apple afconvert's "FLLR" page-alignment filler, or "fact").
+// This avoids the fixed-buffer limit of wav_parse_header for real files.
+static bool read_wav_info(File& f, WavInfo& w) {
+  w = WavInfo{};
+  uint8_t hdr[12];
+  if (f.read(hdr, 12) != 12) return false;
+  if (memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0) return false;
+
+  bool haveFmt = false;
+  uint8_t ch[8];
+  while (f.read(ch, 8) == 8) {
+    uint32_t sz = le32(ch + 4);
+    if (memcmp(ch, "fmt ", 4) == 0) {
+      uint8_t fmt[16];
+      if (f.read(fmt, 16) != 16) return false;
+      w.channels        = le16(fmt + 2);
+      w.sample_rate     = le32(fmt + 4);
+      w.bits_per_sample = le16(fmt + 14);
+      haveFmt = true;
+      uint32_t extra = (sz > 16 ? sz - 16 : 0) + (sz & 1);
+      if (extra) f.seek(f.position() + extra);
+    } else if (memcmp(ch, "data", 4) == 0) {
+      w.data_offset = f.position();
+      w.data_size   = sz;
+      w.valid       = haveFmt;
+      return w.valid;
+    } else {
+      f.seek(f.position() + sz + (sz & 1));   // skip FLLR / fact / unknown
+    }
+  }
+  return false;
+}
+
 void play_file(const PlayReq& req) {
   File f = LittleFS.open(req.path, "r");
   if (!f) { log_e("audio: missing %s", req.path); return; }
 
-  uint8_t hdr[64];
-  size_t n = f.read(hdr, sizeof(hdr));
-  WavInfo w = wav_parse_header(hdr, n);
-  if (!w.valid || w.bits_per_sample != 16) {
+  WavInfo w;
+  if (!read_wav_info(f, w) || w.bits_per_sample != 16) {
     log_e("audio: bad/unsupported WAV %s", req.path);
     f.close();
     return;

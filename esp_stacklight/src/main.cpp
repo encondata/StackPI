@@ -29,9 +29,14 @@ void deliver_light(const LightCommand& c) {
   uint32_t now = millis();
   if (g_statusOwns) { clear_all(now); g_statusOwns = false; }
   lamps.apply(c, now);
+  Serial.printf("[light] color=%d pattern=%d bright=%u\n",
+                (int)c.color, (int)c.pattern, c.brightness);
 }
 
-void deliver_sound(const SoundCommand& c) { audio_play(c); }
+void deliver_sound(const SoundCommand& c) {
+  Serial.printf("[sound] %s vol=%u\n", c.sound, c.volume);
+  audio_play(c);
+}
 
 // Drive the tower to reflect connection state. Returns true while it "owns"
 // the lamps (i.e. not yet connected-and-cleared), false once normal operation
@@ -116,12 +121,9 @@ void loop() {
     buf[len] = '\0';
     ParsedMessage m = parse_message(buf, len);
     if (m.kind == MsgKind::Light) {
-      Serial.printf("[rx] light: color=%d pattern=%d bright=%u\n",
-                    (int)m.light.color, (int)m.light.pattern, m.light.brightness);
-      deliver_light(m.light);
+      deliver_light(m.light);     // logs [light] ...
     } else if (m.kind == MsgKind::Sound) {
-      Serial.printf("[rx] sound: %s vol=%u\n", m.sound.sound, m.sound.volume);
-      deliver_sound(m.sound);
+      deliver_sound(m.sound);     // logs [sound] ...
     }
   }
 

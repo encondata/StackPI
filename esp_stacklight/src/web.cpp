@@ -25,11 +25,14 @@ input[type=range]{width:170px;vertical-align:middle}
 <h2>Brightness <span id=b>80</span>%</h2>
 <input type=range id=br min=0 max=100 value=80 oninput="b.textContent=this.value">
 <h2>Lights</h2><div id=lights></div>
+<h2>Volume <span id=v>80</span>%</h2>
+<input type=range id=vol min=0 max=100 value=80 oninput="v.textContent=this.value">
 <h2>Sound</h2><div class=row>
 <button class=g onclick="snd('alert')">Alert</button>
 <button class=g onclick="snd('error')">Error</button>
 <button class=g onclick="snd('info')">Info</button></div>
-<div class=row><button class=off onclick="fetch('/alloff')">All off</button></div>
+<div class=row><button class=off onclick="go('/alloff','all off')">All off</button></div>
+<div id=s></div>
 <script>
 var C=['red','green','yellow','blue'],L=document.getElementById('lights');
 C.forEach(function(c){var d=document.createElement('div');d.className='row';
@@ -38,10 +41,13 @@ d.innerHTML='<span class=lbl>'+c+'</span>'+
 '<button class="'+c+'" onclick="lt(\''+c+'\',\'flash\')">Flash</button>'+
 '<button class="'+c+'" onclick="lt(\''+c+'\',\'pulse\')">Pulse</button>'+
 '<button class=off onclick="lt(\''+c+'\',\'off\')">Off</button>';L.appendChild(d);});
+function st(m){document.getElementById('s').textContent=m;}
+function go(u,label){st(label+'...');fetch(u).then(function(r){return r.text();})
+.then(function(t){st(label+' → '+t);}).catch(function(){st(label+' → error');});}
 function lt(c,p){var br=document.getElementById('br').value;
-if(p=='off')fetch('/light?color='+c+'&pattern=solid&bright=0');
-else fetch('/light?color='+c+'&pattern='+p+'&bright='+br);}
-function snd(i){fetch('/sound?id='+i);}
+var u=(p=='off')?'/light?color='+c+'&pattern=solid&bright=0':'/light?color='+c+'&pattern='+p+'&bright='+br;
+go(u,c+' '+p);}
+function snd(i){var vol=document.getElementById('vol').value;go('/sound?id='+i+'&vol='+vol,i+' '+vol+'%');}
 </script></body></html>)HTML";
 
 static void handleRoot() { server.send_P(200, "text/html", PAGE); }
@@ -62,11 +68,12 @@ static void handleLight() {
 
 static void handleSound() {
   String id = server.arg("id");
-  char json[120];
+  int vol = server.hasArg("vol") ? server.arg("vol").toInt() : 100;
+  char json[128];
   snprintf(json, sizeof(json),
     "{\"v\":1,\"type\":\"sound\",\"sound\":\"%s\","
-    "\"volume\":100,\"duration\":400,\"repeat_count\":1}",
-    id.c_str());
+    "\"volume\":%d,\"duration\":400,\"repeat_count\":1}",
+    id.c_str(), vol);
   ParsedMessage m = parse_message(json, strlen(json));
   if (m.kind == MsgKind::Sound) { deliver_sound(m.sound); server.send(200, "text/plain", "ok"); }
   else server.send(400, "text/plain", "bad sound");
@@ -90,6 +97,7 @@ void web_begin() {
   server.on("/light", handleLight);
   server.on("/sound", handleSound);
   server.on("/alloff", handleAllOff);
+  server.on("/favicon.ico", []() { server.send(204); });   // quiet browser noise
   server.begin();
   Serial.printf("[web] test page: http://%s/\n", WiFi.localIP().toString().c_str());
 }
