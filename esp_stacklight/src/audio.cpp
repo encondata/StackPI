@@ -19,6 +19,7 @@ struct PlayReq {
 
 I2SClass    i2s;
 QueueHandle_t g_queue = nullptr;   // length 1; newest request preempts
+bool g_i2s_started = false;
 
 void play_file(const PlayReq& req) {
   File f = LittleFS.open(req.path, "r");
@@ -33,10 +34,11 @@ void play_file(const PlayReq& req) {
     return;
   }
 
-  i2s.end();
+  if (g_i2s_started) i2s.end();
   i2s.setPins(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
   i2s.begin(I2S_MODE_STD, w.sample_rate, I2S_DATA_BIT_WIDTH_16BIT,
             I2S_SLOT_MODE_MONO);
+  g_i2s_started = true;
 
   for (uint8_t rep = 0; rep < req.repeat; rep++) {
     f.seek(w.data_offset);
