@@ -68,6 +68,10 @@ def make_socket(group, port):
     """Create a UDP socket bound to the port and joined to the multicast group."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # SO_REUSEPORT lets multiple listeners share the port (common for multicast
+    # on macOS/BSD) and avoids spurious "address already in use" errors.
+    if hasattr(socket, "SO_REUSEPORT"):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     # Bind to all interfaces on the given port so the group's traffic arrives.
     sock.bind(("", port))
     # Join the multicast group on the default interface.
