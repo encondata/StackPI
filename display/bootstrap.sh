@@ -92,7 +92,10 @@ ok "repo at $TARGET_DIR @ $(asuser git -C "$TARGET_DIR" rev-parse --short HEAD)"
 info "Building the static export (slow on a Pi)"
 cd "$TARGET_DIR/portal"
 asuser npm ci
-asuser env STACKPI_DISPLAY_EXPORT=1 npm run build
+# Force Webpack: Next 16 defaults to Turbopack, which has no native bindings on
+# 32-bit ARM (Pi 3 / armhf) — it errors out and tells you to use --webpack.
+# Webpack works on every Pi and is fine for this one-time export build.
+asuser env STACKPI_DISPLAY_EXPORT=1 npm run build -- --webpack
 [[ -d out ]] || fail "export did not produce portal/out (check the build log above)"
 sudo install -d -m 0755 "$APP_DIR/web"
 sudo rsync -a --delete out/ "$APP_DIR/web/"
