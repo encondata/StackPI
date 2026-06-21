@@ -19,6 +19,13 @@ export default function NotificationsPage() {
   const [savingCfg, setSavingCfg] = useState(false);
   const [cfgBanner, setCfgBanner] = useState<Banner>(null);
 
+  // Status broadcast (snapshot to remote displays)
+  const [statusEnabled, setStatusEnabled] = useState(true);
+  const [statusGroup, setStatusGroup] = useState("239.10.10.11");
+  const [statusPort, setStatusPort] = useState("5006");
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<Banner>(null);
+
   // Light test form
   const [pattern, setPattern] = useState<(typeof PATTERNS)[number]>("flash");
   const [color, setColor] = useState<(typeof COLORS)[number]>("red");
@@ -49,6 +56,19 @@ export default function NotificationsPage() {
             setEnabled(d.enabled);
             setGroup(d.multicast_group);
             setPort(String(d.multicast_port));
+          }
+        }
+        const sr = await fetch("/local/notify/status-config", { cache: "no-store" });
+        if (sr.ok) {
+          const sd = (await sr.json()) as {
+            enabled: boolean;
+            multicast_group: string;
+            multicast_port: number;
+          };
+          if (active) {
+            setStatusEnabled(sd.enabled);
+            setStatusGroup(sd.multicast_group);
+            setStatusPort(String(sd.multicast_port));
           }
         }
       } catch {
@@ -85,6 +105,32 @@ export default function NotificationsPage() {
       setCfgBanner({ kind: "error", text: "Could not reach the API." });
     } finally {
       setSavingCfg(false);
+    }
+  }
+
+  async function saveStatus() {
+    setSavingStatus(true);
+    setStatusBanner(null);
+    try {
+      const r = await fetch("/local/notify/status-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: statusEnabled,
+          multicast_group: statusGroup.trim(),
+          multicast_port: Number(statusPort),
+        }),
+      });
+      const b = (await r.json().catch(() => null)) as { detail?: string } | null;
+      setStatusBanner(
+        r.ok
+          ? { kind: "success", text: "Saved." }
+          : { kind: "error", text: b?.detail ?? `Failed (HTTP ${r.status}).` }
+      );
+    } catch {
+      setStatusBanner({ kind: "error", text: "Could not reach the API." });
+    } finally {
+      setSavingStatus(false);
     }
   }
 
@@ -175,6 +221,58 @@ export default function NotificationsPage() {
             className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {savingCfg ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </section>
+
+      {/* Status broadcast */}
+      <section className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 className="text-base font-semibold">Status broadcast</h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          Multicasts a status snapshot (metrics, reader state, recent activity &amp;
+          events) to remote status displays every 5s and on change. Separate
+          group/port from the stack lights.
+        </p>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <label className="block sm:col-span-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Group (IPv4 multicast)
+            </span>
+            <input
+              value={statusGroup}
+              onChange={(e) => setStatusGroup(e.target.value)}
+              className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-1.5 font-mono text-sm focus:border-blue-400 focus:outline-none"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Port
+            </span>
+            <input
+              type="number"
+              value={statusPort}
+              onChange={(e) => setStatusPort(e.target.value)}
+              className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-1.5 font-mono text-sm focus:border-blue-400 focus:outline-none"
+            />
+          </label>
+        </div>
+        <label className="mt-4 flex items-center gap-2 text-sm text-zinc-700">
+          <input
+            type="checkbox"
+            checked={statusEnabled}
+            onChange={(e) => setStatusEnabled(e.target.checked)}
+          />
+          Broadcast status snapshots to remote displays.
+        </label>
+        {statusBanner && <BannerLine b={statusBanner} />}
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={saveStatus}
+            disabled={savingStatus}
+            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {savingStatus ? "Saving…" : "Save"}
           </button>
         </div>
       </section>

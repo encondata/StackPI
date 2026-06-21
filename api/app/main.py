@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.config import get_settings
@@ -19,9 +21,22 @@ from app.notifier import router as notify_router
 settings = get_settings()
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Status snapshot multicast broadcaster (5s heartbeat + on-change).
+    from app import status_broadcast  # noqa: PLC0415
+
+    task = status_broadcast.start()
+    try:
+        yield
+    finally:
+        await status_broadcast.stop(task)
+
+
 app = FastAPI(
     title="StackPI API",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.include_router(local_router)

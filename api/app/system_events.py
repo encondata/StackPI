@@ -68,4 +68,12 @@ def emit(
             proc.returncode, proc.stderr.strip(),
         )
         return False
+
+    # Nudge the status broadcaster so remote displays see the new event promptly.
+    try:
+        from app import status_broadcast  # noqa: PLC0415
+        status_broadcast.mark_dirty()
+    except Exception:  # pragma: no cover
+        pass
+
     return True

@@ -214,4 +214,12 @@ async def ingest_tags(request: Request) -> dict:
         log.exception("rfid-tags insert failed")
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
+    # Nudge the status broadcaster so remote displays see new activity promptly
+    # (the 5s heartbeat would catch it anyway). Best-effort — never break ingest.
+    try:
+        from app import status_broadcast  # noqa: PLC0415
+        status_broadcast.mark_dirty()
+    except Exception:  # pragma: no cover
+        pass
+
     return {"ok": True, "ingested": inserted, "reader_id": reader_id}

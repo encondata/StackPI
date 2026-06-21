@@ -33,7 +33,7 @@ def test_sound_payload_shape() -> None:
 
 def test_send_light_respects_enable(monkeypatch) -> None:
     calls = []
-    monkeypatch.setattr(nf, "_emit", lambda p: calls.append(p) or True)
+    monkeypatch.setattr(nf, "_emit", lambda p, g=None, port=None: calls.append(p) or True)
 
     monkeypatch.setattr(nf, "_enabled", lambda: False)
     assert nf.send_light(nf.LightMessage(**LIGHT)) is False
@@ -41,7 +41,7 @@ def test_send_light_respects_enable(monkeypatch) -> None:
 
     monkeypatch.setattr(nf, "_enabled", lambda: True)
     assert nf.send_light(nf.LightMessage(**LIGHT)) is True
-    assert calls and calls[0]["type"] == "light"
+    assert calls and calls[0]["type"] == "light"  # (p, group, port) — p captured
 
 
 # --- transport (_emit) ------------------------------------------------------
@@ -63,33 +63,28 @@ class _FakeSock:
 
 
 def test_emit_sends_multicast_datagram(monkeypatch) -> None:
-    monkeypatch.setattr(nf, "_get_str", lambda k, d: "239.1.2.3")
-    monkeypatch.setattr(nf, "_get_int", lambda k, d, lo, hi: 5005)
     monkeypatch.setattr(nf.socket, "socket", _FakeSock)
 
     payload = {"v": 1, "type": "light", "color": "red"}
-    assert nf._emit(payload) is True
+    assert nf._emit(payload, "239.1.2.3", 5005) is True
     data, addr = _FakeSock.last
     assert addr == ("239.1.2.3", 5005)
     assert json.loads(data.decode()) == payload
 
 
 def test_emit_swallows_errors(monkeypatch) -> None:
-    monkeypatch.setattr(nf, "_get_str", lambda k, d: "239.1.2.3")
-    monkeypatch.setattr(nf, "_get_int", lambda k, d, lo, hi: 5005)
-
     def boom(*a, **k):
         raise OSError("no network")
 
     monkeypatch.setattr(nf.socket, "socket", boom)
-    assert nf._emit({"x": 1}) is False  # never raises
+    assert nf._emit({"x": 1}, "239.1.2.3", 5005) is False  # never raises
 
 
 # --- test endpoints ---------------------------------------------------------
 
 def test_test_light_endpoint(monkeypatch) -> None:
     captured = {}
-    monkeypatch.setattr(nf, "_emit", lambda p: captured.update(p) or True)
+    monkeypatch.setattr(nf, "_emit", lambda p, g=None, port=None: captured.update(p) or True)
     r = client.post("/local/notify/test/light", json=LIGHT)
     assert r.status_code == 200
     body = r.json()
@@ -99,7 +94,7 @@ def test_test_light_endpoint(monkeypatch) -> None:
 
 
 def test_test_sound_endpoint(monkeypatch) -> None:
-    monkeypatch.setattr(nf, "_emit", lambda p: True)
+    monkeypatch.setattr(nf, "_emit", lambda p, g=None, port=None: True)
     r = client.post("/local/notify/test/sound", json=SOUND)
     assert r.status_code == 200
     assert r.json()["sent"]["type"] == "sound"

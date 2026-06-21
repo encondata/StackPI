@@ -87,13 +87,19 @@ def _sound_payload(m: SoundMessage) -> Dict[str, Any]:
 # Transport
 # ---------------------------------------------------------------------------
 
-def _emit(payload: Dict[str, Any]) -> bool:
-    """Send one JSON datagram to the configured multicast group. Best-effort:
+def _notify_target() -> tuple:
+    """The stack-light notifier's multicast (group, port)."""
+    return (
+        _get_str(KEY_GROUP, DEFAULT_GROUP),
+        _get_int(KEY_PORT, DEFAULT_PORT, 1, 65535),
+    )
+
+
+def _emit(payload: Dict[str, Any], group: str, port: int) -> bool:
+    """Send one JSON datagram to the given multicast group/port. Best-effort:
     returns False (and logs) on any error rather than raising. Does NOT check
-    the enable flag — that gating is in send_light/send_sound so the test
-    endpoints can always fire."""
-    group = _get_str(KEY_GROUP, DEFAULT_GROUP)
-    port = _get_int(KEY_PORT, DEFAULT_PORT, 1, 65535)
+    any enable flag — callers gate. Shared by the stack-light senders and the
+    status broadcaster (each passes its own group/port)."""
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -114,14 +120,14 @@ def send_light(msg: LightMessage) -> bool:
     """Send a light notification, honoring the enable flag."""
     if not _enabled():
         return False
-    return _emit(_light_payload(msg))
+    return _emit(_light_payload(msg), *_notify_target())
 
 
 def send_sound(msg: SoundMessage) -> bool:
     """Send a sound notification, honoring the enable flag."""
     if not _enabled():
         return False
-    return _emit(_sound_payload(msg))
+    return _emit(_sound_payload(msg), *_notify_target())
 
 
 # ---------------------------------------------------------------------------
@@ -171,11 +177,49 @@ def set_config(body: NotifyConfigRequest) -> dict:
 def test_light(body: LightMessage) -> dict:
     """Send a light message now (always fires, regardless of the enable flag)."""
     payload = _light_payload(body)
-    return {"ok": _emit(payload), "sent": payload}
+    return {"ok": _emit(payload, *_notify_target()), "sent": payload}
 
 
 @router.post("/test/sound")
 def test_sound(body: SoundMessage) -> dict:
     """Send a sound message now (always fires, regardless of the enable flag)."""
     payload = _sound_payload(body)
-    return {"ok": _emit(payload), "sent": payload}
+    return {"ok": _emit(payload, *_notify_target()), "sent": payload}
+
+
+# --- status-broadcast config (separate multicast group/port) ----------------
+
+@router.get("/status-config")
+def get_status_config() -> dict:
+    from app import status_broadcast as sb  # noqa: PLC0415
+
+    return {
+        "enabled": sb.status_enabled(),
+        "multicast_group": _get_str(sb.KEY_STATUS_GROUP, sb.DEFAULT_STATUS_GROUP),
+        "multicast_port": _get_int(sb.KEY_STATUS_PORT, sb.DEFAULT_STATUS_PORT, 1, 65535),
+        "group_default": sb.DEFAULT_STATUS_GROUP,
+        "port_default": sb.DEFAULT_STATUS_PORT,
+    }
+
+
+@router.post("/status-config")
+def set_status_config(body: NotifyConfigRequest) -> dict:
+    from app.settings import _persist_setting  # noqa: PLC0415
+    from app import status_broadcast as sb  # noqa: PLC0415
+
+    try:
+        if not ipaddress.IPv4Address(body.multicast_group).is_multicast:
+            raise ValueError
+    except (ipaddress.AddressValueError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="multicast_group must be an IPv4 multicast address (224.0.0.0–239.255.255.255)",
+        )
+    ok = (
+        _persist_setting(sb.KEY_STATUS_ENABLE, "1" if body.enabled else "0")
+        and _persist_setting(sb.KEY_STATUS_GROUP, body.multicast_group)
+        and _persist_setting(sb.KEY_STATUS_PORT, str(int(body.multicast_port)))
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to persist status config")
+    return get_status_config()
