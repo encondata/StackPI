@@ -21,7 +21,7 @@ primary StackPI ──UDP multicast status snapshot (5s + on-change)──▶
   display Pi:  receiver.py  (joins the group, holds the latest snapshot,
                              serves the exported pages + EMULATES the /local/*
                              endpoints + SSE the pages call, from the snapshot)
-               → chromium kiosk → http://localhost:8080/status
+               → chromium kiosk → http://127.0.0.1/status
 ```
 
 The portal `/status` + `/trucks` pages run **unchanged** — same-origin to the
@@ -32,19 +32,20 @@ never talks to the primary.
 
 | file | role |
 |---|---|
-| `receiver.py` | multicast listener + localhost HTTP (static export + emulated endpoints + SSE) |
+| `receiver.py` | multicast listener + HTTP on :80 (static export + emulated endpoints + SSE + `/config`) |
 | `bootstrap.sh` | slim installer (the one-liner) |
 | `config.example.json` | → `/etc/stackpi-display/config.json` (group/port/http_port/web_dir/screen) |
 | `stackpi-display.service` | the receiver |
 | `stackpi-display-kiosk.service` + `sway-display.conf` + `display-kiosk-launch.sh` | the kiosk |
 | `status-protocol.md` | the shared wire spec (also used by the primary sender) |
 
-## Config — on-device setup page
+## Config — on-device config page
 
-Open **`http://<display-ip>:8080/setup`** from any browser on the LAN (a display
-is headless, so the receiver binds on all interfaces — same LAN-trust posture as
-the rest of StackPI; a per-device secret for the admin endpoints is a planned
-follow-up). The `/setup` page lets you:
+The display shows its **own IP** in the status footer (Host / IP). To configure
+it, browse to **`http://<that-ip>/config`** from any browser on the LAN — the
+receiver serves on port 80 and binds all interfaces (a display is headless; same
+LAN-trust posture as the rest of StackPI, a per-device secret for the admin
+endpoints is a planned follow-up). The `/config` page lets you:
 - **Wi-Fi:** scan + connect (`nmcli`).
 - **Multicast group/port** (match the primary's Status broadcast) and **screen**
   (`status` / `trucks`). Saving rewrites `/etc/stackpi-display/config.json` and
@@ -52,8 +53,8 @@ follow-up). The `/setup` page lets you:
   change takes effect on the next kiosk start/reboot.
 
 The config file is also editable directly at `/etc/stackpi-display/config.json`
-(`web_dir`, `http_port`). LAN-reachable `/setup` (behind a per-device secret) is
-a planned follow-up.
+(`web_dir`, `http_port`). Authenticating the admin endpoints with a per-device
+secret is a planned follow-up.
 
 ## First-cut notes (validate on the Pi)
 

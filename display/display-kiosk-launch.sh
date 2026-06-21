@@ -6,7 +6,9 @@ set -e
 CHROMIUM=/usr/bin/chromium
 CFG=/etc/stackpi-display/config.json
 SCREEN="$(python3 -c "import json;print(json.load(open('$CFG')).get('screen','status'))" 2>/dev/null || echo status)"
-PORT="$(python3 -c "import json;print(json.load(open('$CFG')).get('http_port',8080))" 2>/dev/null || echo 8080)"
+PORT="$(python3 -c "import json;print(json.load(open('$CFG')).get('http_port',80))" 2>/dev/null || echo 80)"
+# Drop the :port for the default port 80 so the kiosk URL is just http://host/.
+HOSTPORT="127.0.0.1"; [ "$PORT" = "80" ] || HOSTPORT="127.0.0.1:${PORT}"
 
 # --disable-gpu --no-sandbox are REQUIRED on the Pi 3 (and harmless elsewhere):
 #   * Without --no-sandbox chromium never maps a Wayland window at all (blank).
@@ -21,7 +23,7 @@ PORT="$(python3 -c "import json;print(json.load(open('$CFG')).get('http_port',80
   --check-for-update-interval=31536000 --ozone-platform=wayland \
   --class=stackpi-display \
   --user-data-dir=/tmp/stackpi-display-chromium \
-  "http://127.0.0.1:${PORT}/${SCREEN}" &
+  "http://${HOSTPORT}/${SCREEN}" &
 
 # Keep the window fullscreen. A re-layout (or a slow cold-boot map) can drop it
 # out of fullscreen; re-assert on every sway window event (idempotent), the same

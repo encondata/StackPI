@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 User=csg
+# Bind the privileged port 80 while still running as the kiosk user.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/python3 /opt/stackpi-display/receiver.py
 Restart=on-failure
 RestartSec=3

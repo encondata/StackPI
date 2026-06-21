@@ -29,11 +29,11 @@ from urllib.parse import urlparse, parse_qs
 log = logging.getLogger("stackpi.display.receiver")
 
 CONFIG_PATH = os.environ.get("STACKPI_DISPLAY_CONFIG", "/etc/stackpi-display/config.json")
-SETUP_HTML = os.environ.get("STACKPI_DISPLAY_SETUP", "/opt/stackpi-display/setup.html")
+CONFIG_PAGE = os.environ.get("STACKPI_DISPLAY_CONFIG_PAGE", "/opt/stackpi-display/config.html")
 DEFAULTS = {
     "multicast_group": "239.10.10.11",
     "multicast_port": 5006,
-    "http_port": 8080,
+    "http_port": 80,
     "web_dir": "/opt/stackpi-display/web",
     "screen": "status",
     "repo_dir": "/home/csg/StackPI_v2",
@@ -162,9 +162,29 @@ def emulate(path: str) -> Optional[Any]:
         return {"registration": reg, "status": reg.get("status", "unknown")}
     if path == "/local/rfid/readers":
         return _readers_from_snapshot(snap)
-    if path in ("/local/settings", "/local/rfid/settings", "/local/settings/screen-status"):
+    if path == "/local/settings":
+        # Report THIS display's own hostname + IP so the status footer shows the
+        # display's address (so an operator can read it off the screen and browse
+        # to http://<ip>/config). The footer reads hostname + connections[].ip4.
+        ip = _primary_ip()
+        conns = [{"type": "wired", "device": "eth0", "ip4": ip}] if ip else []
+        return {"hostname": socket.gethostname(), "connections": conns, "wan_ip": None}
+    if path in ("/local/rfid/settings", "/local/settings/screen-status"):
         return {}
     return None
+
+
+def _primary_ip() -> Optional[str]:
+    """This device's primary LAN IPv4, found via a dummy UDP socket (no traffic
+    is sent). Returns None if it can't be determined."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
 
 
 SSE_PATHS = {
@@ -459,8 +479,10 @@ class Handler(BaseHTTPRequestHandler):
     # --- GET ---------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path in ("/setup", "/setup/"):
-            self._send_file(SETUP_HTML, "text/html; charset=utf-8")
+        # The display's own config page lives at /config (the exported portal's
+        # /config is shadowed — it's meaningless here). /setup kept as an alias.
+        if path in ("/config", "/config/", "/setup", "/setup/"):
+            self._send_file(CONFIG_PAGE, "text/html; charset=utf-8")
             return
         if path == "/api/config":
             with _cfg_lock:
@@ -621,7 +643,7 @@ def main() -> None:
     # 127.0.0.1. (LAN auth via a per-device secret is a planned follow-up.)
     bind = "0.0.0.0"
     httpd = ThreadingHTTPServer((bind, int(cfg("http_port"))), Handler)
-    log.info("serving on http://%s:%s (kiosk via 127.0.0.1, /setup on the LAN)", bind, cfg("http_port"))
+    log.info("serving on http://%s:%s (kiosk via 127.0.0.1, /config on the LAN)", bind, cfg("http_port"))
     httpd.serve_forever()
 
 
