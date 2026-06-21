@@ -71,6 +71,17 @@ void setup() {
   lamps.apply(statusCmd(Color::Blue, Pattern::Solid, 100, 1, 1), millis());
   lamps.update(millis());
   audio_begin();
+
+  // Boot chime: enqueue the alert sound. The audio task runs on core 0, so it
+  // plays during the blocking net_begin() below. Ignored if the WAV is missing.
+  SoundCommand boot;
+  strncpy(boot.sound, BOOT_SOUND_ID, sizeof(boot.sound) - 1);
+  boot.sound[sizeof(boot.sound) - 1] = '\0';
+  boot.volume = 100;
+  boot.duration_ms = 400;
+  boot.repeat_count = 1;
+  audio_play(boot);
+
   net_begin();           // blocks until WiFi connect or portal timeout
 }
 

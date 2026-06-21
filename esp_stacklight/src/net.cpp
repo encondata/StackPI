@@ -29,6 +29,13 @@ void net_begin() {
   wm.addParameter(&pPort);
   wm.setAPCallback(on_portal);
 
+  // First boot (no operator-saved creds): preload the factory default network
+  // so the device joins it without opening the portal. Operator creds saved
+  // via the portal persist and take priority on later boots.
+  if (!wm.getWiFiIsSaved()) {
+    wm.preloadWiFi(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
+  }
+
   g_state = NetState::Connecting;
   bool ok = wm.autoConnect(AP_NAME);   // blocks: portal if no saved creds / fail
 

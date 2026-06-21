@@ -21,3 +21,11 @@
 
 // --- Captive portal ---
 #define AP_NAME          "StackLight-Setup"
+
+// --- Default Wi-Fi (preloaded on first boot; operator can still override via
+//     the captive portal, after which the saved creds take priority) ---
+#define DEFAULT_WIFI_SSID "HSL-IOT"
+#define DEFAULT_WIFI_PASS "bb169ea953"
+
+// --- Boot sound (played once at startup; ignored if the WAV is missing) ---
+#define BOOT_SOUND_ID    "alert"
