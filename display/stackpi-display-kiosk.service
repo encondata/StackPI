@@ -19,7 +19,7 @@ StandardOutput=journal
 StandardError=journal
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 # Wait for the local receiver before launching the browser.
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -sf http://localhost:8080/status >/dev/null && exit 0; sleep 1; done; exit 1'
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/status >/dev/null && exit 0; sleep 1; done; exit 1'
 ExecStartPre=/bin/sh -c 'rm -rf /tmp/stackpi-display-chromium && install -d -o csg -g csg /tmp/stackpi-display-chromium'
 ExecStart=/usr/bin/sway -c /etc/stackpi-display/sway-display.conf
 Restart=on-failure

@@ -614,12 +614,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     load_config()
     threading.Thread(target=multicast_listener, daemon=True).start()
-    # Bind to localhost only. The kiosk browser runs ON this device and reaches
-    # the receiver via localhost; the admin surface (/setup, /api/config,
-    # /api/wifi/*) is sensitive and must NOT be exposed unauthenticated on the
-    # LAN. Reach /setup remotely via an SSH tunnel until LAN auth is added.
-    httpd = ThreadingHTTPServer(("127.0.0.1", int(cfg("http_port"))), Handler)
-    log.info("serving on http://127.0.0.1:%s (kiosk + /setup)", cfg("http_port"))
+    # Bind on all interfaces so /setup is reachable from a laptop on the LAN —
+    # a display is headless, so localhost-only would make config impossible
+    # without SSH. Same LAN-trust posture as the rest of StackPI; the admin
+    # endpoints keep the CSRF/Content-Type guards. The kiosk itself uses
+    # 127.0.0.1. (LAN auth via a per-device secret is a planned follow-up.)
+    bind = "0.0.0.0"
+    httpd = ThreadingHTTPServer((bind, int(cfg("http_port"))), Handler)
+    log.info("serving on http://%s:%s (kiosk via 127.0.0.1, /setup on the LAN)", bind, cfg("http_port"))
     httpd.serve_forever()
 
 

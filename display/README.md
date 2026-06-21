@@ -41,15 +41,10 @@ never talks to the primary.
 
 ## Config — on-device setup page
 
-The receiver binds to **localhost only** — the admin surface (`/setup`,
-`/api/config`, `/api/wifi/*`) is unauthenticated, so it is deliberately not
-exposed on the LAN. Reach it from a laptop over an SSH tunnel:
-
-```bash
-ssh -L 8080:localhost:8080 csg@<display-ip>   # then open http://localhost:8080/setup
-```
-
-The `/setup` page lets you:
+Open **`http://<display-ip>:8080/setup`** from any browser on the LAN (a display
+is headless, so the receiver binds on all interfaces — same LAN-trust posture as
+the rest of StackPI; a per-device secret for the admin endpoints is a planned
+follow-up). The `/setup` page lets you:
 - **Wi-Fi:** scan + connect (`nmcli`).
 - **Multicast group/port** (match the primary's Status broadcast) and **screen**
   (`status` / `trucks`). Saving rewrites `/etc/stackpi-display/config.json` and
