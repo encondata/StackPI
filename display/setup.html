@@ -59,19 +59,35 @@ async function loadNet(){
   document.getElementById("net").textContent = "IP: " + ips;
 }
 async function scan(){
-  document.getElementById("wifi").innerHTML = "<div class='mono'>scanning…</div>";
+  const box = document.getElementById("wifi");
+  box.replaceChildren(el("div", "mono", "scanning…"));
   const { body } = await j("/api/wifi/scan");
   const nets = body.networks||[];
-  document.getElementById("wifi").innerHTML = nets.length ? nets.map(n =>
-    `<div class="row"><span>${n.in_use?"● ":""}${escapeHtml(n.ssid)} <span class="mono">${n.signal}% ${escapeHtml(n.security||"")}</span></span>
-     <button class="sec" onclick="connect('${escapeAttr(n.ssid)}')">Connect</button></div>`).join("") : "<div class='mono'>no networks found</div>";
+  if (!nets.length){ box.replaceChildren(el("div", "mono", "no networks found")); return; }
+  // Build rows with DOM APIs (textContent / addEventListener) — never string
+  // concatenation — so a crafted SSID can't inject markup or script.
+  box.replaceChildren(...nets.map(n => {
+    const row = el("div", "row");
+    const label = el("span", null, (n.in_use ? "● " : "") + (n.ssid || ""));
+    label.appendChild(el("span", "mono", " " + n.signal + "% " + (n.security || "")));
+    const btn = el("button", "sec", "Connect");
+    btn.addEventListener("click", () => connect(n.ssid));
+    row.append(label, btn);
+    return row;
+  }));
+}
+function el(tag, cls, text){
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
 }
 async function connect(ssid){
   selectedSsid = ssid;
   const pw = document.getElementById("pw").value;
   msg("wifiMsg", "connecting to " + ssid + "…");
   const { body } = await j("/api/wifi/connect", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ssid, password: pw }) });
-  msg("wifiMsg", body.ok ? ("Connected to " + ssid + ".") : ("Failed: " + (body.output||body.error||"")), body.ok);
+  msg("wifiMsg", body.ok ? ("Connected to " + ssid + ".") : ("Failed (" + (body.status||"error") + ")."), body.ok);
   loadNet();
 }
 async function loadCfg(){
@@ -88,8 +104,6 @@ async function saveCfg(){
   msg("cfgMsg", ok ? "Saved." : ("Failed: " + (body.error||"")), ok);
 }
 function msg(id, text, ok){ const e=document.getElementById(id); e.className="msg "+(ok===undefined?"":ok?"ok":"err"); e.textContent=text; }
-function escapeHtml(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
-function escapeAttr(s){ return (s||"").replace(/'/g,"\\'"); }
 loadNet(); loadCfg();
 </script>
 </body>

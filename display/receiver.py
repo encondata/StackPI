@@ -23,6 +23,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 log = logging.getLogger("stackpi.display.receiver")
 
@@ -203,9 +204,11 @@ def wifi_connect(ssid: str, password: str) -> Dict[str, Any]:
         args += ["password", password]
     try:
         p = _nmcli(args, timeout=45)
-    except (subprocess.SubprocessError, OSError) as e:
-        return {"ok": False, "error": str(e)}
-    return {"ok": p.returncode == 0, "output": (p.stdout or p.stderr).strip()[:300]}
+    except (subprocess.SubprocessError, OSError):
+        return {"ok": False, "status": "error"}
+    # Map the result to a status — never echo raw nmcli output back to the
+    # caller (it can contain the SSID/password and other internals).
+    return {"ok": p.returncode == 0, "status": "connected" if p.returncode == 0 else "failed"}
 
 
 def net_status() -> Dict[str, Any]:
@@ -236,6 +239,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _same_origin(self, origin: str) -> bool:
+        # Accept only an Origin whose host matches the Host header we answered on.
+        host = (self.headers.get("Host") or "").split(":", 1)[0]
+        try:
+            ohost = urlparse(origin).hostname or ""
+        except ValueError:
+            return False
+        return bool(host) and ohost == host
 
     def _read_json(self) -> Dict[str, Any]:
         n = int(self.headers.get("Content-Length", 0) or 0)
@@ -274,6 +286,17 @@ class Handler(BaseHTTPRequestHandler):
     # --- POST --------------------------------------------------------------
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        # CSRF / drive-by guard: state-changing POSTs must be same-origin JSON.
+        # The setup page always sends application/json from the device's own
+        # origin; a form-POST from another page in the browser cannot set either.
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip()
+        if ctype != "application/json":
+            self._json({"ok": False, "error": "expected application/json"}, 415)
+            return
+        origin = self.headers.get("Origin")
+        if origin and not self._same_origin(origin):
+            self._json({"ok": False, "error": "cross-origin POST rejected"}, 403)
+            return
         body = self._read_json()
         if path == "/api/config":
             updates: Dict[str, Any] = {}
@@ -370,8 +393,12 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     load_config()
     threading.Thread(target=multicast_listener, daemon=True).start()
-    httpd = ThreadingHTTPServer(("0.0.0.0", int(cfg("http_port"))), Handler)
-    log.info("serving on http://0.0.0.0:%s (kiosk + /setup)", cfg("http_port"))
+    # Bind to localhost only. The kiosk browser runs ON this device and reaches
+    # the receiver via localhost; the admin surface (/setup, /api/config,
+    # /api/wifi/*) is sensitive and must NOT be exposed unauthenticated on the
+    # LAN. Reach /setup remotely via an SSH tunnel until LAN auth is added.
+    httpd = ThreadingHTTPServer(("127.0.0.1", int(cfg("http_port"))), Handler)
+    log.info("serving on http://127.0.0.1:%s (kiosk + /setup)", cfg("http_port"))
     httpd.serve_forever()
 
 

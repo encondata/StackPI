@@ -41,8 +41,15 @@ never talks to the primary.
 
 ## Config — on-device setup page
 
-Open **`http://<display-ip>:8080/setup`** (from any browser on the LAN, or the
-display itself) to:
+The receiver binds to **localhost only** — the admin surface (`/setup`,
+`/api/config`, `/api/wifi/*`) is unauthenticated, so it is deliberately not
+exposed on the LAN. Reach it from a laptop over an SSH tunnel:
+
+```bash
+ssh -L 8080:localhost:8080 csg@<display-ip>   # then open http://localhost:8080/setup
+```
+
+The `/setup` page lets you:
 - **Wi-Fi:** scan + connect (`nmcli`).
 - **Multicast group/port** (match the primary's Status broadcast) and **screen**
   (`status` / `trucks`). Saving rewrites `/etc/stackpi-display/config.json` and
@@ -50,7 +57,8 @@ display itself) to:
   change takes effect on the next kiosk start/reboot.
 
 The config file is also editable directly at `/etc/stackpi-display/config.json`
-(`web_dir`, `http_port`).
+(`web_dir`, `http_port`). LAN-reachable `/setup` (behind a per-device secret) is
+a planned follow-up.
 
 ## First-cut notes (validate on the Pi)
 
