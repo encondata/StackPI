@@ -18,8 +18,10 @@ def test_build_snapshot_shape(monkeypatch) -> None:
     monkeypatch.setattr("app.rfid.matches_recent", lambda limit: {"matches": [{"i": i} for i in range(50)]})
     monkeypatch.setattr(sb, "_recent_events", lambda limit: [{"id": i} for i in range(limit)])
 
+    monkeypatch.setattr(sb, "_primary_uptime", lambda: 12345)
     snap = sb.build_snapshot()
-    assert snap["v"] == 1
+    assert snap["v"] == 2
+    assert snap["uptime"] == 12345
     assert snap["type"] == "status"
     assert "ts" in snap
     assert snap["metrics"] == {"tags_today": 5, "readers_up": 1}
@@ -104,6 +106,42 @@ def test_status_config_post_persists_excluded(monkeypatch) -> None:
     assert r.status_code == 200
     # stale "bogus:id" filtered out; rest persisted as sorted CSV
     assert persisted[sb.KEY_STATUS_EXCLUDE] == "events,metric:readers"
+
+
+def test_diff_scalars_and_feeds() -> None:
+    last = {
+        "metrics": {"tags_today": 5}, "reader": {"state": "online"},
+        "registration": {"status": "registered"},
+        "activity": [{"id": 2}, {"id": 1}], "events": [{"id": 9}],
+    }
+    # unchanged → None
+    assert sb._diff(dict(last), last) is None
+    # a metric changes + a new activity item + a new event
+    current = {
+        "metrics": {"tags_today": 6}, "reader": {"state": "online"},
+        "registration": {"status": "registered"},
+        "activity": [{"id": 3}, {"id": 2}, {"id": 1}], "events": [{"id": 10}, {"id": 9}],
+    }
+    d = sb._diff(current, last)
+    assert d == {"metrics": {"tags_today": 6}, "activity_new": [{"id": 3}], "events_new": [{"id": 10}]}
+    # reader/registration unchanged are NOT included
+    assert "reader" not in d and "registration" not in d
+
+
+def test_uptime_not_in_diff() -> None:
+    # uptime differing must NOT by itself produce a delta (it's not diffed)
+    base = {"metrics": {}, "reader": {}, "registration": {}, "activity": [], "events": []}
+    a = {**base, "uptime": 100}
+    b = {**base, "uptime": 101}
+    assert sb._diff(a, b) is None
+
+
+def test_build_snapshot_excludes_uptime(monkeypatch) -> None:
+    monkeypatch.setattr("app.local.local_metrics", lambda: {"tags_today": 1})
+    monkeypatch.setattr(sb, "status_excluded", lambda: {"uptime"})
+    monkeypatch.setattr(sb, "_primary_uptime", lambda: 999)
+    snap = sb.build_snapshot()
+    assert "uptime" not in snap
 
 
 def test_mark_dirty_noop_without_loop(monkeypatch) -> None:

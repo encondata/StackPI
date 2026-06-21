@@ -20,8 +20,9 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("stackpi.status_broadcast")
 
-SCHEMA_VERSION = 1
-HEARTBEAT_SEC = 5.0
+SCHEMA_VERSION = 2          # v2: diff + keyframe protocol (see status-protocol.md)
+HEARTBEAT_SEC = 5.0         # change-detection cadence (wake at least this often)
+KEYFRAME_SEC = 30.0         # full re-sync interval (cold-start / packet-loss recovery)
 DEBOUNCE_SEC = 0.5          # min spacing between emits, so a burst → one send
 ACTIVITY_LIMIT = 20
 EVENTS_LIMIT = 20
@@ -49,6 +50,7 @@ STATUS_CATALOG: List[Dict[str, Any]] = [
     {"id": "registration",  "label": "Registration",                    "group": "section"},
     {"id": "activity",      "label": "Recent activity (truck matches)", "group": "section"},
     {"id": "events",        "label": "System events",                   "group": "section"},
+    {"id": "uptime",        "label": "Uptime",                          "group": "section"},
 ]
 CATALOG_IDS = {e["id"] for e in STATUS_CATALOG}
 
@@ -174,7 +176,50 @@ def build_snapshot() -> Dict[str, Any]:
         except Exception as e:  # pragma: no cover
             log.debug("snapshot events failed: %s", e)
 
+    if "uptime" not in excluded:
+        snap["uptime"] = _primary_uptime()
+
     return snap
+
+
+def _primary_uptime() -> Optional[int]:
+    """This (primary) device's uptime in seconds, from /proc/uptime. The display
+    mirrors the primary's status, so its Uptime card shows the primary's uptime."""
+    try:
+        from app.settings import _read_uptime_seconds  # noqa: PLC0415
+        return _read_uptime_seconds()
+    except Exception:  # pragma: no cover - best effort
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Diff (v2): scalars replaced wholesale; feeds carry only the new items by id.
+# uptime is deliberately NOT diffed — it changes every second and would force a
+# delta every cycle. It rides keyframes (and any delta we're already sending).
+# ---------------------------------------------------------------------------
+
+_SCALAR_SECTIONS = ("metrics", "reader", "registration")
+
+
+def _new_feed_items(current: List[dict], last: List[dict]) -> List[dict]:
+    last_ids = {it.get("id") for it in last if isinstance(it, dict)}
+    return [it for it in current if isinstance(it, dict) and it.get("id") not in last_ids]
+
+
+def _diff(current: Dict[str, Any], last: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Changed sections of `current` vs `last`, or None if nothing changed.
+    Scalars are sent whole; activity/events send only the new items to append."""
+    delta: Dict[str, Any] = {}
+    for k in _SCALAR_SECTIONS:
+        if current.get(k) != last.get(k):
+            delta[k] = current.get(k)
+    act = _new_feed_items(current.get("activity", []), last.get("activity", []))
+    if act:
+        delta["activity_new"] = act
+    evt = _new_feed_items(current.get("events", []), last.get("events", []))
+    if evt:
+        delta["events_new"] = evt
+    return delta or None
 
 
 # ---------------------------------------------------------------------------
@@ -200,19 +245,47 @@ def mark_dirty() -> None:
 async def _run() -> None:
     log.info("status broadcaster started")
     loop = asyncio.get_event_loop()
+    from app import notifier  # noqa: PLC0415
+
+    last_sent: Optional[Dict[str, Any]] = None  # what receivers should now hold
+    last_keyframe = 0.0
     while True:
         try:
             try:
                 await asyncio.wait_for(_dirty.wait(), timeout=HEARTBEAT_SEC)
             except asyncio.TimeoutError:
-                pass  # heartbeat
+                pass  # heartbeat tick
             _dirty.clear()
 
-            if status_enabled():
-                snapshot = await loop.run_in_executor(None, build_snapshot)
-                group, port = status_target()
-                from app import notifier  # noqa: PLC0415
-                notifier._emit(snapshot, group, port)
+            if not status_enabled():
+                last_sent = None  # force a fresh keyframe when re-enabled
+                await asyncio.sleep(DEBOUNCE_SEC)
+                continue
+
+            current = await loop.run_in_executor(None, build_snapshot)
+            group, port = status_target()
+            now = loop.time()
+
+            if last_sent is None or (now - last_keyframe) >= KEYFRAME_SEC:
+                # Keyframe: the full snapshot, so cold-started / lossy receivers
+                # re-sync. (build_snapshot already stamps v/type/ts.)
+                msg = dict(current)
+                msg["kind"] = "full"
+                notifier._emit(msg, group, port)
+                last_sent = current
+                last_keyframe = now
+            else:
+                delta = _diff(current, last_sent)
+                if delta:  # nothing changed → nothing on the wire
+                    delta.update({
+                        "v": SCHEMA_VERSION,
+                        "type": "status",
+                        "kind": "delta",
+                        "ts": current.get("ts"),
+                        "uptime": current.get("uptime"),
+                    })
+                    notifier._emit(delta, group, port)
+                    last_sent = current
 
             await asyncio.sleep(DEBOUNCE_SEC)  # collapse a burst into one send
         except asyncio.CancelledError:

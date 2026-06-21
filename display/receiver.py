@@ -82,14 +82,42 @@ def save_config(updates: Dict[str, Any]) -> None:
 # Latest-snapshot store
 # ---------------------------------------------------------------------------
 
+FEED_CAP = 20
+
+
+def _merge_feed(new_items: List[dict], existing: List[dict]) -> List[dict]:
+    """Prepend new items (newest-first) to a feed, dropping dupes by id, capped."""
+    new_ids = {it.get("id") for it in new_items if isinstance(it, dict)}
+    merged = list(new_items) + [it for it in existing if isinstance(it, dict) and it.get("id") not in new_ids]
+    return merged[:FEED_CAP]
+
+
 class SnapshotStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._snap: Dict[str, Any] = {}
 
     def set(self, snap: Dict[str, Any]) -> None:
+        """Replace the whole snapshot (a 'full' keyframe, or a legacy v1 message)."""
         with self._lock:
             self._snap = snap
+
+    def merge_delta(self, delta: Dict[str, Any]) -> None:
+        """Apply a v2 'delta': replace changed scalar sections, append feed items,
+        update uptime/ts. Missing sections are left as-is."""
+        with self._lock:
+            s = dict(self._snap)
+            for k in ("metrics", "reader", "registration"):
+                if k in delta:
+                    s[k] = delta[k]
+            if "activity_new" in delta:
+                s["activity"] = _merge_feed(delta["activity_new"], s.get("activity", []))
+            if "events_new" in delta:
+                s["events"] = _merge_feed(delta["events_new"], s.get("events", []))
+            for k in ("uptime", "ts"):
+                if k in delta:
+                    s[k] = delta[k]
+            self._snap = s
 
     def get(self) -> Dict[str, Any]:
         with self._lock:
@@ -120,7 +148,10 @@ def multicast_listener() -> None:
                 except ValueError:
                     continue
                 if isinstance(msg, dict) and msg.get("type") == "status":
-                    STORE.set(msg)
+                    if msg.get("kind") == "delta":
+                        STORE.merge_delta(msg)
+                    else:  # "full" keyframe, or a legacy v1 message (no kind)
+                        STORE.set(msg)
         except OSError as e:
             # save_config closed the socket → rebind with new group/port.
             log.info("multicast listener rebinding (%s)", e)
@@ -166,9 +197,16 @@ def emulate(path: str) -> Optional[Any]:
         # Report THIS display's own hostname + IP so the status footer shows the
         # display's address (so an operator can read it off the screen and browse
         # to http://<ip>/config). The footer reads hostname + connections[].ip4.
+        # uptime_seconds comes from the primary's snapshot (the Uptime card
+        # mirrors the primary); the page ticks it locally between updates.
         ip = _primary_ip()
         conns = [{"type": "wired", "device": "eth0", "ip4": ip}] if ip else []
-        return {"hostname": socket.gethostname(), "connections": conns, "wan_ip": None}
+        return {
+            "hostname": socket.gethostname(),
+            "connections": conns,
+            "wan_ip": None,
+            "uptime_seconds": snap.get("uptime"),
+        }
     if path in ("/local/rfid/settings", "/local/settings/screen-status"):
         return {}
     return None
