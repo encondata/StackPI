@@ -11,7 +11,14 @@
 #define PIN_I2S_LRC      26
 #define PIN_I2S_DIN      25
 
-// --- LEDC PWM ---
+// --- Lamp driver ---
+// 1 = relay board (digital on/off);  0 = MOSFET board (PWM dimming).
+#define USE_RELAYS       1
+// Most 4-channel relay modules are active-low (IN pulled LOW energizes the
+// relay). Set to 0 if yours energizes on HIGH.
+#define RELAY_ACTIVE_LOW 1
+
+// --- LEDC PWM (used only when USE_RELAYS = 0) ---
 #define LEDC_FREQ_HZ     5000
 #define LEDC_RES_BITS    8        // duty 0..255
 
