@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 // /local/notify/{config,test/light,test/sound}.
 
 type Banner = { kind: "success" | "error"; text: string } | null;
+type CatalogEntry = { id: string; label: string; group: "metrics" | "section" };
 
 const PATTERNS = ["solid", "flash", "pulse"] as const;
 const COLORS = ["red", "green", "yellow", "blue"] as const;
@@ -25,6 +26,9 @@ export default function NotificationsPage() {
   const [statusPort, setStatusPort] = useState("5006");
   const [savingStatus, setSavingStatus] = useState(false);
   const [statusBanner, setStatusBanner] = useState<Banner>(null);
+  // What-to-send tick boxes: catalog from the API + the set of excluded ids.
+  const [statusCatalog, setStatusCatalog] = useState<CatalogEntry[]>([]);
+  const [statusExcluded, setStatusExcluded] = useState<Set<string>>(new Set());
 
   // Light test form
   const [pattern, setPattern] = useState<(typeof PATTERNS)[number]>("flash");
@@ -64,11 +68,15 @@ export default function NotificationsPage() {
             enabled: boolean;
             multicast_group: string;
             multicast_port: number;
+            catalog?: CatalogEntry[];
+            excluded?: string[];
           };
           if (active) {
             setStatusEnabled(sd.enabled);
             setStatusGroup(sd.multicast_group);
             setStatusPort(String(sd.multicast_port));
+            setStatusCatalog(sd.catalog ?? []);
+            setStatusExcluded(new Set(sd.excluded ?? []));
           }
         }
       } catch {
@@ -119,6 +127,7 @@ export default function NotificationsPage() {
           enabled: statusEnabled,
           multicast_group: statusGroup.trim(),
           multicast_port: Number(statusPort),
+          excluded: Array.from(statusExcluded),
         }),
       });
       const b = (await r.json().catch(() => null)) as { detail?: string } | null;
@@ -132,6 +141,15 @@ export default function NotificationsPage() {
     } finally {
       setSavingStatus(false);
     }
+  }
+
+  function toggleSend(id: string, send: boolean) {
+    setStatusExcluded((prev) => {
+      const next = new Set(prev);
+      if (send) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   async function sendTest(
@@ -264,6 +282,35 @@ export default function NotificationsPage() {
           />
           Broadcast status snapshots to remote displays.
         </label>
+
+        {/* What to send — tick boxes (all on by default) */}
+        {statusCatalog.length > 0 && (
+          <div className="mt-5 border-t border-zinc-100 pt-4">
+            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              What to send
+            </span>
+            <p className="mt-1 text-xs text-zinc-500">
+              All on by default. Unchecked items are omitted from the snapshot (and not
+              computed), so remote displays won&apos;t show them.
+            </p>
+            <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+              {statusCatalog.map((c) => (
+                <label key={c.id} className="flex items-center gap-2 text-sm text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={!statusExcluded.has(c.id)}
+                    onChange={(e) => toggleSend(c.id, e.target.checked)}
+                  />
+                  {c.label}
+                  {c.group === "section" && (
+                    <span className="text-xs text-zinc-400">(section)</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         {statusBanner && <BannerLine b={statusBanner} />}
         <div className="mt-4">
           <button

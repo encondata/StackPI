@@ -48,6 +48,64 @@ def test_build_snapshot_best_effort(monkeypatch) -> None:
     assert snap["events"] == []
 
 
+def test_build_snapshot_honors_exclusions(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.local.local_metrics",
+        lambda: {"tags_today": 5, "readers_up": 1, "readers_total": 2, "last_sync": "x"},
+    )
+    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "online", "name": "R1", "configured": True})
+    monkeypatch.setattr("app.local.local_overview", lambda settings: {"registration": {"status": "registered"}})
+    monkeypatch.setattr("app.rfid.matches_recent", lambda limit: {"matches": [{"i": 1}]})
+    monkeypatch.setattr(sb, "_recent_events", lambda limit: [{"id": 1}])
+    # Exclude the readers metric card + the reader section + events.
+    monkeypatch.setattr(sb, "status_excluded", lambda: {"metric:readers", "reader", "events"})
+
+    snap = sb.build_snapshot()
+    assert "readers_up" not in snap["metrics"] and "readers_total" not in snap["metrics"]
+    assert snap["metrics"]["tags_today"] == 5  # other cards untouched
+    assert snap["reader"] == {}            # section skipped
+    assert snap["events"] == []            # section skipped
+    assert snap["registration"] == {"status": "registered"}  # still on
+    assert snap["activity"] == [{"i": 1}]                      # still on
+
+
+def test_status_excluded_drops_stale_ids(monkeypatch) -> None:
+    monkeypatch.setattr("app.settings._get_setting_str", lambda k, d: "metric:readers, bogus:id ,events")
+    assert sb.status_excluded() == {"metric:readers", "events"}
+
+
+def test_status_config_get_includes_catalog(monkeypatch) -> None:
+    monkeypatch.setattr(sb, "status_enabled", lambda: True)
+    monkeypatch.setattr(sb, "status_excluded", lambda: {"events"})
+    monkeypatch.setattr("app.notifier._get_str", lambda k, d: "239.10.10.11")
+    monkeypatch.setattr("app.notifier._get_int", lambda k, d, lo, hi: 5006)
+    body = client.get("/local/notify/status-config").json()
+    assert body["excluded"] == ["events"]
+    ids = {e["id"] for e in body["catalog"]}
+    assert "metric:readers" in ids and "events" in ids
+
+
+def test_status_config_post_persists_excluded(monkeypatch) -> None:
+    persisted = {}
+    monkeypatch.setattr("app.settings._persist_setting", lambda k, v: persisted.__setitem__(k, v) or True)
+    monkeypatch.setattr(sb, "status_enabled", lambda: True)
+    monkeypatch.setattr(sb, "status_excluded", lambda: set())
+    monkeypatch.setattr("app.notifier._get_str", lambda k, d: "239.9.9.9")
+    monkeypatch.setattr("app.notifier._get_int", lambda k, d, lo, hi: 5006)
+    r = client.post(
+        "/local/notify/status-config",
+        json={
+            "enabled": True,
+            "multicast_group": "239.9.9.9",
+            "multicast_port": 5006,
+            "excluded": ["metric:readers", "events", "bogus:id"],
+        },
+    )
+    assert r.status_code == 200
+    # stale "bogus:id" filtered out; rest persisted as sorted CSV
+    assert persisted[sb.KEY_STATUS_EXCLUDE] == "events,metric:readers"
+
+
 def test_mark_dirty_noop_without_loop(monkeypatch) -> None:
     monkeypatch.setattr(sb, "_loop", None)
     sb.mark_dirty()  # must not raise

@@ -30,8 +30,27 @@ EVENTS_LIMIT = 20
 KEY_STATUS_ENABLE = "notify_status_enable"
 KEY_STATUS_GROUP = "notify_status_multicast_group"
 KEY_STATUS_PORT = "notify_status_multicast_port"
+KEY_STATUS_EXCLUDE = "notify_status_exclude"
 DEFAULT_STATUS_GROUP = "239.10.10.11"
 DEFAULT_STATUS_PORT = 5006
+
+# Toggle catalog for the /config "what to send" tick boxes. Each entry is one
+# checkbox. Metric cards map to one or more keys in the metrics dict (paired
+# values like readers up/total are a single card). Selection is stored as a
+# DENYLIST (KEY_STATUS_EXCLUDE, CSV of ids): default empty => send everything,
+# and any card added here later is sent by default until explicitly excluded.
+STATUS_CATALOG: List[Dict[str, Any]] = [
+    {"id": "metric:tags_today",        "label": "Tags today",             "group": "metrics", "keys": ["tags_today"]},
+    {"id": "metric:unique_tags_today", "label": "Unique tags today",      "group": "metrics", "keys": ["unique_tags_today"]},
+    {"id": "metric:readers",           "label": "Readers up / total",     "group": "metrics", "keys": ["readers_up", "readers_total"]},
+    {"id": "metric:last_sync",         "label": "Last sync",              "group": "metrics", "keys": ["last_sync"]},
+    {"id": "metric:assets",            "label": "Assets matched / total", "group": "metrics", "keys": ["assets_total", "assets_matched"]},
+    {"id": "reader",        "label": "Reader status (traffic light)",   "group": "section"},
+    {"id": "registration",  "label": "Registration",                    "group": "section"},
+    {"id": "activity",      "label": "Recent activity (truck matches)", "group": "section"},
+    {"id": "events",        "label": "System events",                   "group": "section"},
+]
+CATALOG_IDS = {e["id"] for e in STATUS_CATALOG}
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +68,18 @@ def status_target() -> tuple:
         _get_setting_str(KEY_STATUS_GROUP, DEFAULT_STATUS_GROUP),
         _get_setting_int(KEY_STATUS_PORT, DEFAULT_STATUS_PORT, 1, 65535),
     )
+
+
+def status_excluded() -> set:
+    """Set of disabled toggle ids (the denylist). Stale ids no longer in the
+    catalog are dropped so they can't accidentally suppress a reused id. If the
+    setting can't be read, default to the empty set (send everything)."""
+    from app.settings import _get_setting_str  # noqa: PLC0415
+    try:
+        raw = _get_setting_str(KEY_STATUS_EXCLUDE, "")
+    except Exception:  # pragma: no cover - best effort; never break the snapshot
+        return set()
+    return {p.strip() for p in raw.split(",") if p.strip()} & CATALOG_IDS
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +104,12 @@ def _recent_events(limit: int) -> List[dict]:
 
 def build_snapshot() -> Dict[str, Any]:
     """Assemble the status snapshot by reusing the existing data functions.
-    Each source is independently guarded — one failure leaves that section
-    empty rather than dropping the whole snapshot. Blocking (psql) — call via
-    an executor from the async loop."""
+    Honors the operator's send selection (status_excluded): excluded metric
+    cards are filtered out of `metrics`, and excluded sections are skipped
+    entirely (no psql for them). Each source is independently guarded — one
+    failure leaves that section empty rather than dropping the whole snapshot.
+    Blocking (psql) — call via an executor from the async loop."""
+    excluded = status_excluded()
     snap: Dict[str, Any] = {
         "v": SCHEMA_VERSION,
         "type": "status",
@@ -87,47 +121,58 @@ def build_snapshot() -> Dict[str, Any]:
         "events": [],
     }
 
+    # Metrics is one cheap call; build it then drop the excluded cards' keys.
+    drop_keys = {
+        k
+        for entry in STATUS_CATALOG
+        if entry["group"] == "metrics" and entry["id"] in excluded
+        for k in entry.get("keys", [])
+    }
     try:
         from app.local import local_metrics  # noqa: PLC0415
         m = local_metrics()
         if isinstance(m, dict):
-            snap["metrics"] = m
+            snap["metrics"] = {k: v for k, v in m.items() if k not in drop_keys}
     except Exception as e:  # pragma: no cover - best effort
         log.debug("snapshot metrics failed: %s", e)
 
-    try:
-        from app.rfid import get_active_reader  # noqa: PLC0415
-        ar = get_active_reader()
-        if isinstance(ar, dict):
-            snap["reader"] = {
-                "state": ar.get("state"),
-                "name": ar.get("name"),
-                "configured": ar.get("configured"),
-            }
-    except Exception as e:  # pragma: no cover
-        log.debug("snapshot reader failed: %s", e)
+    if "reader" not in excluded:
+        try:
+            from app.rfid import get_active_reader  # noqa: PLC0415
+            ar = get_active_reader()
+            if isinstance(ar, dict):
+                snap["reader"] = {
+                    "state": ar.get("state"),
+                    "name": ar.get("name"),
+                    "configured": ar.get("configured"),
+                }
+        except Exception as e:  # pragma: no cover
+            log.debug("snapshot reader failed: %s", e)
 
-    try:
-        from app.config import get_settings  # noqa: PLC0415
-        from app.local import local_overview  # noqa: PLC0415
-        ov = local_overview(get_settings())
-        if isinstance(ov, dict):
-            snap["registration"] = ov.get("registration", {})
-    except Exception as e:  # pragma: no cover
-        log.debug("snapshot registration failed: %s", e)
+    if "registration" not in excluded:
+        try:
+            from app.config import get_settings  # noqa: PLC0415
+            from app.local import local_overview  # noqa: PLC0415
+            ov = local_overview(get_settings())
+            if isinstance(ov, dict):
+                snap["registration"] = ov.get("registration", {})
+        except Exception as e:  # pragma: no cover
+            log.debug("snapshot registration failed: %s", e)
 
-    try:
-        from app.rfid import matches_recent  # noqa: PLC0415
-        mr = matches_recent(ACTIVITY_LIMIT)
-        if isinstance(mr, dict):
-            snap["activity"] = (mr.get("matches") or [])[:ACTIVITY_LIMIT]
-    except Exception as e:  # pragma: no cover
-        log.debug("snapshot activity failed: %s", e)
+    if "activity" not in excluded:
+        try:
+            from app.rfid import matches_recent  # noqa: PLC0415
+            mr = matches_recent(ACTIVITY_LIMIT)
+            if isinstance(mr, dict):
+                snap["activity"] = (mr.get("matches") or [])[:ACTIVITY_LIMIT]
+        except Exception as e:  # pragma: no cover
+            log.debug("snapshot activity failed: %s", e)
 
-    try:
-        snap["events"] = _recent_events(EVENTS_LIMIT)
-    except Exception as e:  # pragma: no cover
-        log.debug("snapshot events failed: %s", e)
+    if "events" not in excluded:
+        try:
+            snap["events"] = _recent_events(EVENTS_LIMIT)
+        except Exception as e:  # pragma: no cover
+            log.debug("snapshot events failed: %s", e)
 
     return snap
 

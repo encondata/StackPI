@@ -20,7 +20,7 @@ import ipaddress
 import json
 import logging
 import socket
-from typing import Any, Dict, Literal
+from typing import Any, Dict, List, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -199,11 +199,20 @@ def get_status_config() -> dict:
         "multicast_port": _get_int(sb.KEY_STATUS_PORT, sb.DEFAULT_STATUS_PORT, 1, 65535),
         "group_default": sb.DEFAULT_STATUS_GROUP,
         "port_default": sb.DEFAULT_STATUS_PORT,
+        # What-to-send tick boxes: the catalog (id/label/group) + the disabled
+        # ids (denylist). A checkbox is ticked when its id is NOT in `excluded`.
+        "catalog": sb.STATUS_CATALOG,
+        "excluded": sorted(sb.status_excluded()),
     }
 
 
+class StatusConfigRequest(NotifyConfigRequest):
+    # Disabled toggle ids (denylist). Unknown ids are ignored on save.
+    excluded: List[str] = Field(default_factory=list)
+
+
 @router.post("/status-config")
-def set_status_config(body: NotifyConfigRequest) -> dict:
+def set_status_config(body: StatusConfigRequest) -> dict:
     from app.settings import _persist_setting  # noqa: PLC0415
     from app import status_broadcast as sb  # noqa: PLC0415
 
@@ -215,10 +224,12 @@ def set_status_config(body: NotifyConfigRequest) -> dict:
             status_code=400,
             detail="multicast_group must be an IPv4 multicast address (224.0.0.0–239.255.255.255)",
         )
+    excluded = sorted(set(body.excluded) & sb.CATALOG_IDS)
     ok = (
         _persist_setting(sb.KEY_STATUS_ENABLE, "1" if body.enabled else "0")
         and _persist_setting(sb.KEY_STATUS_GROUP, body.multicast_group)
         and _persist_setting(sb.KEY_STATUS_PORT, str(int(body.multicast_port)))
+        and _persist_setting(sb.KEY_STATUS_EXCLUDE, ",".join(excluded))
     )
     if not ok:
         raise HTTPException(status_code=500, detail="failed to persist status config")
