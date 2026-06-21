@@ -71,6 +71,10 @@ audio task (core 0):  blocks on queue -> streams WAV via I2S
 - WiFiManager: on first boot or when saved WiFi fails to connect, host an AP +
   captive config page. Config page has standard SSID/password plus **custom
   fields for multicast group and port**, saved to NVS.
+- **Default Wi-Fi**: on first boot (no operator-saved creds) the firmware
+  preloads a factory-default network (`DEFAULT_WIFI_SSID` / `DEFAULT_WIFI_PASS`
+  in `config.h`) so the device joins it without opening the portal. Once an
+  operator saves creds via the portal, those persist and take priority.
 - After connect: join the UDP multicast group on the configured port.
 - `poll()` — non-blocking; returns the next datagram (≤512 bytes) or nothing.
 - Tracks link state and surfaces it for status indication (section 7).
@@ -106,11 +110,14 @@ audio task (core 0):  blocks on queue -> streams WAV via I2S
   ignored (logged), never errors.
 - `volume` (0–100) scales samples; `repeat_count` replays the clip.
 - A new `sound` message preempts the current playback (latest wins).
+- **Boot chime**: `setup()` enqueues `BOOT_SOUND_ID` (`alert`) once at startup;
+  the core-0 audio task plays it while `net_begin()` connects. Ignored if the
+  WAV is missing.
 - Independent from lamps.
 
 ### 4.6 `main`
-- `setup()` — init config/NVS, LittleFS, lamps (PWM), audio task, net (WiFi +
-  multicast).
+- `setup()` — init config/NVS, LittleFS, lamps (PWM), audio task, play boot
+  chime, net (WiFi + multicast).
 - `loop()` — `net.poll()` → `protocol.handle()` → `lamps.update()`.
 
 ## 5. Lamp behavior summary (additive, independent)
