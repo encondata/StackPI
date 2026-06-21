@@ -105,6 +105,8 @@ ok "exported portal → $APP_DIR/web"
 info "Installing the receiver + config + services"
 sudo install -m 0755 "$TARGET_DIR/display/receiver.py" "$APP_DIR/receiver.py"
 sudo install -m 0644 "$TARGET_DIR/display/setup.html" "$APP_DIR/setup.html"
+# Boot-splash logo (shown as the sway background until the kiosk paints).
+sudo install -m 0644 "$TARGET_DIR/portal/public/stackpi-logo.png" "$APP_DIR/logo.png"
 sudo install -d -m 0755 "$CFG_DIR"
 if [[ ! -f "$CFG_DIR/config.json" ]]; then
   sudo install -m 0644 "$TARGET_DIR/display/config.example.json" "$CFG_DIR/config.json"
