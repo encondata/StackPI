@@ -827,16 +827,24 @@ def disconnect_wifi(body: WifiDisconnectRequest) -> dict:
 
 @router.get("/connectivity")
 def get_connectivity() -> Dict[str, Any]:
-    """Local-link + internet reachability for the kiosk internet flow.
-    gateway_ok = default gateway answers ICMP (we have a usable LAN);
-    internet_ok = at least one external host answers (we have real internet)."""
+    """Local-link + internet + portal reachability for the kiosk.
+    gateway_ok  = default gateway answers ICMP (we have a usable LAN);
+    portal_ok   = the StackPI portal host answers (we can reach the cloud);
+    internet_ok = the portal OR a general host answers (we have real internet)."""
     gateway = _default_gateway()
     gateway_ok = bool(gateway) and _ping(gateway)
-    internet_ok = any(_ping(h) for h in _CONNECTIVITY_HOSTS)
+    portal_host = _CONNECTIVITY_HOSTS[0]  # portal.serversherpa.com
+    portal_ok = _ping(portal_host)
+    # If the portal is reachable we already have internet; otherwise probe a
+    # general host to tell "internet but portal down" (yellow) from "no
+    # internet" (red).
+    internet_ok = portal_ok or any(_ping(h) for h in _CONNECTIVITY_HOSTS[1:])
     return {
         "gateway": gateway,
         "gateway_ok": gateway_ok,
         "internet_ok": internet_ok,
+        "portal_ok": portal_ok,
+        "portal_host": portal_host,
         "checked": list(_CONNECTIVITY_HOSTS),
     }
 

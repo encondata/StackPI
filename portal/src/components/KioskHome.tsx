@@ -30,6 +30,8 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
   const [dateStr, setDateStr] = useState<string>("");
   const [host, setHost] = useState<string>("…");
   const [ip, setIp] = useState<string>("");
+  // IP colour by reachability: portal=green, internet-only=amber, none=red.
+  const [ipTone, setIpTone] = useState<string>("text-zinc-400");
 
   // Client clock — same formatting as /status.
   useEffect(() => {
@@ -86,6 +88,32 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
     };
   }, []);
 
+  // Reachability for the IP colour: green = portal reachable, amber = internet
+  // but portal unreachable, red = no internet. The check pings on the device,
+  // so poll modestly.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await fetch("/local/settings/connectivity", { cache: "no-store" });
+        if (!cancelled && r.ok) {
+          const d = (await r.json()) as { internet_ok?: boolean; portal_ok?: boolean };
+          setIpTone(
+            d.portal_ok ? "text-green-400" : d.internet_ok ? "text-amber-400" : "text-red-400",
+          );
+        }
+      } catch {
+        /* keep last colour */
+      }
+    }
+    load();
+    const id = setInterval(load, 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   return (
     <main className="flex h-screen w-screen flex-col gap-4 overflow-hidden bg-zinc-950 p-4 text-zinc-100">
       <FlashAlertOverlay />
@@ -98,6 +126,7 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
             dimmed={c.dimmed}
             href={c.href}
             subtitle={c.title === "Network" ? ip || undefined : undefined}
+            subtitleTone={c.title === "Network" ? ipTone : undefined}
           />
         ))}
         <RfidReaderCard />
@@ -113,12 +142,14 @@ function HomeCard({
   dimmed = false,
   href,
   subtitle,
+  subtitleTone,
 }: {
   title: string;
   Icon: LucideIcon;
   dimmed?: boolean;
   href?: string;
   subtitle?: string;
+  subtitleTone?: string;
 }) {
   const cls =
     "flex flex-col items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 " +
@@ -129,7 +160,7 @@ function HomeCard({
       <div className="flex flex-col items-center gap-0.5">
         <p className="text-lg font-semibold tracking-tight text-zinc-100">{title}</p>
         {subtitle && (
-          <p className="font-mono text-sm text-zinc-400">{subtitle}</p>
+          <p className={"font-mono text-sm " + (subtitleTone ?? "text-zinc-400")}>{subtitle}</p>
         )}
       </div>
     </>
