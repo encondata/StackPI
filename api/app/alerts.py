@@ -128,10 +128,10 @@ def fire(
         label = (f"SN {serial} · " if serial else "") + f"Tag {tag}"
         # Reader name is intentionally omitted from the on-screen message.
         msg = "Not in move: " + label
-        play_sound()
         from app import system_events  # noqa: PLC0415
         # detail carries severity → drives the flash color (critical=red,
-        # warning=yellow). v1 "not in move" is critical/red.
+        # warning=yellow) AND the audio cue (critical → Error sound). v1 "not in
+        # move" is critical/red. Audio plays via system_events.emit → audio.on_event.
         system_events.emit("rfid-alert", "alert", msg, severity)
         return True
     except Exception as e:  # pragma: no cover - alert must never break ingest

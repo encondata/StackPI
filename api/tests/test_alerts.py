@@ -8,8 +8,9 @@ client = TestClient(app)
 
 
 def test_fire_debounces_per_tag(monkeypatch):
-    played, emitted = [], []
-    monkeypatch.setattr(alerts, "play_sound", lambda: played.append(1))
+    # fire() emits a System Event (which now drives the audio cue via
+    # system_events.emit → audio.on_event); it no longer plays sound directly.
+    emitted = []
     monkeypatch.setattr(system_events, "emit", lambda *a, **k: emitted.append(a) or True)
     monkeypatch.setattr(alerts, "_get_int", lambda k, d, lo, hi: 30)  # 30s window
     alerts._last_fired.clear()
@@ -17,7 +18,6 @@ def test_fire_debounces_per_tag(monkeypatch):
     assert alerts.fire("TAG1", serial="S1", reader_name="R1") is True
     assert alerts.fire("TAG1", serial="S1", reader_name="R1") is False  # debounced
     assert alerts.fire("TAG2") is True  # different tag still fires
-    assert len(played) == 2
     assert len(emitted) == 2
     # event uses source 'rfid-alert', kind 'alert', severity in detail
     assert emitted[0][0] == "rfid-alert" and emitted[0][1] == "alert"

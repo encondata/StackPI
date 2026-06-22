@@ -135,9 +135,12 @@ sudo install -d -m 0755 /etc/stackpi
 sudo install -m 0644 "$REPO_DIR/deploy/sway/sway-kiosk.conf" /etc/stackpi/sway-kiosk.conf
 sudo install -m 0644 "$REPO_DIR/deploy/assets/stackpi-logo.png" /etc/stackpi/stackpi-logo.png
 sudo install -m 0755 "$REPO_DIR/deploy/scripts/stackpi-kiosk-launch.sh" /usr/local/bin/
-# Bad-tag alert sounds (played by the API's app/alerts.py).
+# Audio-feedback sounds (played by the API's app/audio.py). Owned by the API
+# service user (csg) so the Audio config page's drag-and-drop upload can write
+# here.
 sudo install -d -m 0755 /etc/stackpi/sounds
 sudo install -m 0644 "$REPO_DIR/deploy/assets/sounds/"*.wav /etc/stackpi/sounds/
+sudo chown -R csg:csg /etc/stackpi/sounds
 ok "kiosk assets installed"
 
 ###############################################################################

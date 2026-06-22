@@ -76,4 +76,11 @@ def emit(
     except Exception:  # pragma: no cover
         pass
 
+    # Play the mapped audio cue on the Pi speaker (error/alert/info), best-effort.
+    try:
+        from app import audio  # noqa: PLC0415
+        audio.on_event(kind, detail)
+    except Exception:  # pragma: no cover
+        pass
+
     return True

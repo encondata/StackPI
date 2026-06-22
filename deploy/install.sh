@@ -59,6 +59,12 @@ PACKAGES=(
   plymouth
   plymouth-themes
 
+  # Audio feedback (app/audio.py): players for the alert/error/info sounds and
+  # ffmpeg to transcode uploaded mp3/ogg to WAV.
+  alsa-utils          # aplay
+  pulseaudio-utils    # paplay (PipeWire pulse-compat)
+  ffmpeg
+
   # General utilities
   curl
   ca-certificates

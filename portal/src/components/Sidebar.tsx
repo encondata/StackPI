@@ -92,6 +92,7 @@ function buildMenu(pgwebHost: string): MenuItem[] {
         { title: "Screen Settings", href: "/config/settings/screen-settings" },
         { title: "Status Screen", href: "/config/settings/screen-status" },
         { title: "Notifications", href: "/config/settings/notifications" },
+        { title: "Audio", href: "/config/settings/audio" },
         { title: "Software Update", href: "/config/settings/update" },
       ],
     },
