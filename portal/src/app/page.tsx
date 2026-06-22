@@ -27,6 +27,7 @@ async function fetchStatus(): Promise<LocalStatus> {
 export default function KioskRoot() {
   const [data, setData] = useState<LocalStatus | null>(null);
   const [internetOk, setInternetOk] = useState<boolean | null>(null);
+  const [ip, setIp] = useState<string>("");
 
   const statusRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -75,12 +76,40 @@ export default function KioskRoot() {
     };
   }, []);
 
+  // This device's own LAN IP (shown on the pairing screen so an operator can
+  // browse to it). Same source as the /status footer.
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const r = await fetch("/local/settings", { cache: "no-store" });
+        if (!cancelled && r.ok) {
+          const d = (await r.json()) as {
+            connections?: Array<{ type?: string; device?: string; ip4?: string | null }>;
+          };
+          const first = (d.connections ?? []).find(
+            (c) => c.type !== "loopback" && c.device !== "lo" && c.ip4
+          );
+          if (first?.ip4) setIp(first.ip4);
+        }
+      } catch {
+        /* keep last good value */
+      }
+    }
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   if (!data) return <LoadingShell />;
   if (data.status === "registered")
     return <KioskHome offline={data.connectivity === "offline"} />;
   if (data.status === "revoked") return <RevokedShell />;
   if (data.status === "pre_registered" && data.pairing_token) {
-    return <PairingShell data={data} />;
+    return <PairingShell data={data} ip={ip} />;
   }
   // Not registered and no pairing code yet. If we've confirmed there's no
   // internet, the device can't fetch a code — send the operator to the
@@ -115,7 +144,7 @@ function RevokedShell() {
   );
 }
 
-function PairingShell({ data }: { data: LocalStatus }) {
+function PairingShell({ data, ip }: { data: LocalStatus; ip: string }) {
   const token = data.pairing_token ?? "";
   const link = data.link_url ?? "";
   // link_url is expected to be an absolute URL when STACKPI_LINK_URL_BASE is
@@ -133,6 +162,12 @@ function PairingShell({ data }: { data: LocalStatus }) {
           priority
           className="h-auto w-full max-w-[280px] object-contain"
         />
+        {ip && (
+          <p className="font-mono text-base text-zinc-700">
+            <span className="text-zinc-400">IP </span>
+            {ip}
+          </p>
+        )}
         <p className="text-sm text-zinc-500">Waiting for pairing…</p>
       </div>
 
