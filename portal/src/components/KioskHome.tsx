@@ -11,16 +11,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-// The first three home cards. "Internet" navigates to /internet; the others
-// are placeholders for now. The 4th cell is the live RFID Reader card
-// (status + start/stop), rendered separately below. Icons are from
-// lucide-react (already a dependency).
+// The first three home cards. "Network" navigates to /internet (and shows this
+// device's IP); the others are placeholders for now. The 4th cell is the live
+// RFID Reader card (status + start/stop), rendered separately below. Icons are
+// from lucide-react (already a dependency).
 type HomeCardDef = { title: string; Icon: LucideIcon; dimmed?: boolean; href?: string };
 
 const HOME_CARDS: HomeCardDef[] = [
   { title: "Initial Setup", Icon: Rocket, href: "/initial-setup" },
   { title: "Config", Icon: Settings, href: "/device-config" },
-  { title: "Internet", Icon: Globe, href: "/internet" },
+  { title: "Network", Icon: Globe, href: "/internet" },
 ];
 
 // Shown on / when the device is registered. 800×480 touchscreen home:
@@ -29,6 +29,7 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
   const [time, setTime] = useState<string>("");
   const [dateStr, setDateStr] = useState<string>("");
   const [host, setHost] = useState<string>("…");
+  const [ip, setIp] = useState<string>("");
 
   // Client clock — same formatting as /status.
   useEffect(() => {
@@ -55,23 +56,33 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
     return () => clearInterval(id);
   }, []);
 
-  // Hostname — same endpoint /status reads. Keeps last value on failure.
+  // Hostname + this device's LAN IP — same endpoint /status reads. Keeps last
+  // value on failure; refreshed periodically since the IP can change (DHCP).
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         const r = await fetch("/local/settings", { cache: "no-store" });
         if (!cancelled && r.ok) {
-          const d = (await r.json()) as { hostname?: string };
+          const d = (await r.json()) as {
+            hostname?: string;
+            connections?: Array<{ type?: string; device?: string; ip4?: string | null }>;
+          };
           if (d?.hostname) setHost(d.hostname);
+          const first = (d.connections ?? []).find(
+            (c) => c.type !== "loopback" && c.device !== "lo" && c.ip4,
+          );
+          if (first?.ip4) setIp(first.ip4);
         }
       } catch {
         /* keep last value */
       }
     }
     load();
+    const id = setInterval(load, 30_000);
     return () => {
       cancelled = true;
+      clearInterval(id);
     };
   }, []);
 
@@ -86,6 +97,7 @@ export function KioskHome({ offline = false }: { offline?: boolean }) {
             Icon={c.Icon}
             dimmed={c.dimmed}
             href={c.href}
+            subtitle={c.title === "Network" ? ip || undefined : undefined}
           />
         ))}
         <RfidReaderCard />
@@ -100,11 +112,13 @@ function HomeCard({
   Icon,
   dimmed = false,
   href,
+  subtitle,
 }: {
   title: string;
   Icon: LucideIcon;
   dimmed?: boolean;
   href?: string;
+  subtitle?: string;
 }) {
   const cls =
     "flex flex-col items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 " +
@@ -112,7 +126,12 @@ function HomeCard({
   const inner = (
     <>
       <Icon className="h-12 w-12 text-zinc-400" strokeWidth={1.6} aria-hidden />
-      <p className="text-lg font-semibold tracking-tight text-zinc-100">{title}</p>
+      <div className="flex flex-col items-center gap-0.5">
+        <p className="text-lg font-semibold tracking-tight text-zinc-100">{title}</p>
+        {subtitle && (
+          <p className="font-mono text-sm text-zinc-400">{subtitle}</p>
+        )}
+      </div>
     </>
   );
   if (href) {
