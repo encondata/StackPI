@@ -58,6 +58,24 @@ export function StepSummary({
     };
   }, []);
 
+  // Push the site + scan type to the cloud as soon as Step 4 loads — so the
+  // Scan Type row confirms on load (like Move/Site) instead of waiting for a
+  // Save button. The buttons below then just start (or skip) the RFID radio.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setBusyLabel("Confirming scan type…");
+      setPhase("working");
+      const ok = await commit();
+      if (cancelled || !mounted.current) return;
+      setPhase(ok ? "idle" : "commit_error");
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // After a successful start, head back to the home screen shortly.
   useEffect(() => {
     if (phase !== "started") return;
@@ -118,14 +136,18 @@ export function StepSummary({
   async function saveAndStart() {
     setMode("with_radio");
     setError(null);
-    setBusyLabel("Saving settings…");
-    setPhase("working");
-    if (!(await commit())) {
-      if (mounted.current) setPhase("commit_error");
-      return;
+    // Settings were already committed on load; only re-commit if that failed.
+    if (!committed) {
+      setBusyLabel("Saving settings…");
+      setPhase("working");
+      if (!(await commit())) {
+        if (mounted.current) setPhase("commit_error");
+        return;
+      }
+      if (!mounted.current) return;
     }
-    if (!mounted.current) return;
     setBusyLabel("Starting RFID radio…");
+    setPhase("working");
     const ok = await startRadio();
     if (!mounted.current) return;
     setPhase(ok ? "started" : "start_error");
@@ -134,12 +156,16 @@ export function StepSummary({
   async function saveOnly() {
     setMode("no_radio");
     setError(null);
-    setBusyLabel("Saving settings…");
-    setPhase("working");
-    const ok = await commit();
-    if (!mounted.current) return;
-    if (ok) onHome();
-    else setPhase("commit_error");
+    if (!committed) {
+      setBusyLabel("Saving settings…");
+      setPhase("working");
+      if (!(await commit())) {
+        if (mounted.current) setPhase("commit_error");
+        return;
+      }
+      if (!mounted.current) return;
+    }
+    onHome();
   }
 
   function retryCommit() {
