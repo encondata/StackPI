@@ -37,6 +37,10 @@
 // --- Boot sound (played once at startup; ignored if the WAV is missing) ---
 #define BOOT_SOUND_ID    "alert"
 
+// --- Boot animation (color cycle at startup) ---
+#define BOOT_ANIM_TOTAL_MS 5000   // total duration
+#define BOOT_ANIM_STEP_MS  500    // time each color stays on
+
 // --- OTA updates ---
 #define OTA_HOSTNAME  "stacklight"   // mDNS name: stacklight.local
 // Optional OTA auth (empty password = no auth). Applies to both the pio/espota
