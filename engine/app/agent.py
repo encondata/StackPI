@@ -27,8 +27,11 @@ State machine (loops forever):
 """
 import logging
 import socket
+import subprocess
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -40,6 +43,37 @@ from app.hardware import get_hardware_serial
 log = logging.getLogger(__name__)
 
 _USER_AGENT = "stackpi-engine/0.1.0"
+_VERSION_FALLBACK = "engine-0.1.0"
+
+
+@lru_cache(maxsize=1)
+def _code_version() -> str:
+    """The git revision the running code is at — e.g. 'main@4cf914d' (with
+    '-dirty' appended if tracked files have uncommitted changes). Cached: a
+    redeploy restarts this process, so the running commit is fixed for its life.
+    Falls back to the package version string if git isn't available."""
+    repo = str(Path(__file__).resolve().parents[2])  # engine/app/agent.py → repo root
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", repo, *args],
+                              capture_output=True, text=True, timeout=5)
+
+    try:
+        sha = git("rev-parse", "--short", "HEAD")
+        if sha.returncode != 0 or not sha.stdout.strip():
+            return _VERSION_FALLBACK
+        ver = sha.stdout.strip()
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        name = branch.stdout.strip()
+        if branch.returncode == 0 and name and name != "HEAD":
+            ver = f"{name}@{ver}"
+        # '-dirty' only for uncommitted changes to TRACKED files (ignore the
+        # untracked build artifacts a deployed checkout accumulates).
+        if git("diff", "--quiet", "HEAD").returncode == 1:
+            ver += "-dirty"
+        return ver
+    except (subprocess.SubprocessError, OSError):
+        return _VERSION_FALLBACK
 
 HEARTBEAT_FAILURE_THRESHOLD = 3
 
@@ -279,7 +313,7 @@ def _send_heartbeat(settings: Settings) -> tuple[Optional[int], Optional[str]]:
         "metadata": {
             "ip": _best_local_ip(),
             "hostname": socket.gethostname(),
-            "version": "engine-0.1.0",
+            "version": _code_version(),
         }
     }
     try:
