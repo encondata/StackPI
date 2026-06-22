@@ -139,4 +139,12 @@ NetState net_state() {
 }
 
 uint32_t net_hb_timeout_ms() { return (uint32_t)g_settings.hb_timeout_s * 1000UL; }
+uint16_t net_hb_timeout_s()  { return g_settings.hb_timeout_s; }
 uint8_t  net_hb_fail_count() { return g_settings.hb_fail_count; }
+
+void net_set_heartbeat(uint16_t timeout_s, uint8_t fail_count) {
+  g_settings.hb_timeout_s  = timeout_s;
+  g_settings.hb_fail_count = fail_count;
+  settings_save(g_settings);   // persist to NVS
+  Serial.printf("[net] heartbeat saved: timeout=%us fail=%u\n", timeout_s, fail_count);
+}

@@ -2,6 +2,7 @@
 #include "notify.h"
 #include "protocol.h"
 #include "config.h"
+#include "net.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -34,6 +35,14 @@ input[type=range]{width:170px;vertical-align:middle}
 <button class=g onclick="snd('error')">Error</button>
 <button class=g onclick="snd('info')">Info</button></div>
 <div class=row><button class=off onclick="go('/alloff','all off')">All off</button></div>
+<h2>Watchdog</h2>
+<div class=row>
+<label class=lbl style="width:auto">timeout s</label>
+<input type=number id=hbsec min=0 max=65535 style="width:74px">
+<label class=lbl style="width:auto">fail count</label>
+<input type=number id=hbcnt min=1 max=50 style="width:62px">
+<button class=g onclick="saveCfg()">Save</button>
+</div>
 <div id=s></div>
 <script>
 var C=['red','green','yellow','blue'],L=document.getElementById('lights');
@@ -50,6 +59,11 @@ function lt(c,p){var br=document.getElementById('br').value;
 var u=(p=='off')?'/light?color='+c+'&pattern=solid&bright=0':'/light?color='+c+'&pattern='+p+'&bright='+br;
 go(u,c+' '+p);}
 function snd(i){var vol=document.getElementById('vol').value;go('/sound?id='+i+'&vol='+vol,i+' '+vol+'%');}
+function loadCfg(){fetch('/cfg').then(function(r){return r.json();}).then(function(c){
+document.getElementById('hbsec').value=c.hbsec;document.getElementById('hbcnt').value=c.hbcnt;});}
+function saveCfg(){var s=document.getElementById('hbsec').value,c=document.getElementById('hbcnt').value;
+go('/cfg?hbsec='+s+'&hbcnt='+c,'watchdog');}
+loadCfg();
 </script></body></html>)HTML";
 
 static void handleRoot() { server.send_P(200, "text/html", PAGE); }
@@ -81,6 +95,28 @@ static void handleSound() {
   else server.send(400, "text/plain", "bad sound");
 }
 
+static void handleCfg() {
+  // No args -> return current watchdog settings as JSON for the form to load.
+  if (!server.hasArg("hbsec") && !server.hasArg("hbcnt")) {
+    char j[64];
+    snprintf(j, sizeof(j), "{\"hbsec\":%u,\"hbcnt\":%u}",
+             net_hb_timeout_s(), net_hb_fail_count());
+    server.send(200, "application/json", j);
+    return;
+  }
+  // With args -> apply and persist to NVS (survives reboot).
+  long sec = server.hasArg("hbsec") ? server.arg("hbsec").toInt() : net_hb_timeout_s();
+  long cnt = server.hasArg("hbcnt") ? server.arg("hbcnt").toInt() : net_hb_fail_count();
+  if (sec < 0)     sec = 0;
+  if (sec > 65535) sec = 65535;
+  if (cnt < 1)     cnt = 1;
+  if (cnt > 50)    cnt = 50;
+  net_set_heartbeat((uint16_t)sec, (uint8_t)cnt);
+  char j[80];
+  snprintf(j, sizeof(j), "saved: timeout=%lds fail=%ld", sec, cnt);
+  server.send(200, "text/plain", j);
+}
+
 static void handleAllOff() {
   const char* colors[] = { "red", "green", "yellow", "blue" };
   for (auto c : colors) {
@@ -99,6 +135,7 @@ void web_begin() {
   server.on("/light", handleLight);
   server.on("/sound", handleSound);
   server.on("/alloff", handleAllOff);
+  server.on("/cfg", handleCfg);
   server.on("/favicon.ico", []() { server.send(204); });   // quiet browser noise
 
   // Web OTA at /update (firmware + filesystem upload from a browser).
