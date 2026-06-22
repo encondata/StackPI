@@ -6,10 +6,17 @@
 #include "net.h"
 #include "notify.h"
 #include "web.h"
+#include "watchdog.h"
 
 static Lamps lamps;
 static bool g_statusOwns = true;       // does the status indicator currently own the lamps?
 static uint32_t g_connectedAt = 0;
+
+// Heartbeat watchdog state.
+static uint32_t g_lastMsgMs = 0;       // millis() of the last multicast message
+static AlarmKind g_alarmKind = AlarmKind::None;
+static uint8_t   g_alarmMiss = 0;
+static bool      g_yellowOn = false;   // last-applied yellow state during flash
 
 // Build a status LightCommand for one color/pattern.
 static LightCommand statusCmd(Color c, Pattern p, uint8_t bright, uint32_t dur, uint8_t rep) {
@@ -80,6 +87,43 @@ static bool show_status(uint32_t now) {
   return true;
 }
 
+// Heartbeat watchdog: escalate when multicast messages stop arriving. Owns the
+// tower (clears other colors) while alarming; cleared when a message arrives.
+static void watchdog_update(uint32_t now) {
+  if (net_state() != NetState::Connected) return;  // only while connected
+  if (g_statusOwns) return;                         // let status indication finish first
+
+  AlarmState a = watchdog_eval(now - g_lastMsgMs, net_hb_timeout_ms(), net_hb_fail_count());
+
+  if (a.kind == AlarmKind::None) {                  // healthy
+    if (g_alarmKind != AlarmKind::None) { clear_all(now); g_alarmKind = AlarmKind::None; }
+    return;
+  }
+
+  if (a.kind == AlarmKind::YellowFlash) {
+    if (g_alarmKind != AlarmKind::YellowFlash || g_alarmMiss != a.miss) {
+      clear_all(now);                               // new level: take over the tower
+      g_alarmKind = AlarmKind::YellowFlash;
+      g_alarmMiss = a.miss;
+      g_yellowOn  = false;
+      Serial.printf("[watchdog] miss %u: yellow flash %ums\n", a.miss, a.period_ms);
+    }
+    bool on = (now % a.period_ms) < (a.period_ms / 2);
+    if (on != g_yellowOn) {
+      lamps.apply(statusCmd(Color::Yellow, Pattern::Solid, on ? 100 : 0, 1, 1), now);
+      g_yellowOn = on;
+    }
+  } else {  // Red: red on + yellow solid
+    if (g_alarmKind != AlarmKind::Red) {
+      clear_all(now);
+      lamps.apply(statusCmd(Color::Yellow, Pattern::Solid, 100, 1, 1), now);
+      lamps.apply(statusCmd(Color::Red,    Pattern::Solid, 100, 1, 1), now);
+      g_alarmKind = AlarmKind::Red;
+      Serial.printf("[watchdog] miss %u: RED alarm\n", a.miss);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
@@ -97,6 +141,7 @@ void setup() {
     web_begin();         // serve the test page once we have an IP
   }
   Serial.println("[stacklight] setup done, entering main loop");
+  g_lastMsgMs = millis();   // start the heartbeat watchdog clock from connect
 
   // Boot chime — played AFTER Wi-Fi setup so the audio and Wi-Fi current
   // spikes don't overlap (which can brown out a marginal USB supply).
@@ -120,6 +165,10 @@ void loop() {
   if (len > 0) {
     buf[len] = '\0';
     ParsedMessage m = parse_message(buf, len);
+    if (m.kind != MsgKind::Ignore) {
+      g_lastMsgMs = now;          // heartbeat: reset the watchdog
+      if (g_alarmKind != AlarmKind::None) { clear_all(now); g_alarmKind = AlarmKind::None; }
+    }
     if (m.kind == MsgKind::Light) {
       deliver_light(m.light);     // logs [light] ...
     } else if (m.kind == MsgKind::Sound) {
@@ -127,6 +176,7 @@ void loop() {
     }
   }
 
+  watchdog_update(now);
   web_handle();
   lamps.update(now);
   delay(2);

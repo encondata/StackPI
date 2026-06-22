@@ -36,3 +36,10 @@
 
 // --- Boot sound (played once at startup; ignored if the WAV is missing) ---
 #define BOOT_SOUND_ID    "alert"
+
+// --- Heartbeat watchdog (operator-editable on the config page, saved to NVS) ---
+// Timeout in seconds with no multicast message before escalating. 0 = disabled.
+#define DEFAULT_HB_TIMEOUT_S  30
+// Number of misses until the final red alarm. Misses before it flash yellow
+// (period halving: 2s, 1s, 0.5s, ...).
+#define DEFAULT_HB_FAIL_COUNT 4

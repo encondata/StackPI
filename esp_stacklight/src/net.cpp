@@ -24,14 +24,20 @@ void on_portal(WiFiManager*) {
 void net_begin() {
   g_settings = settings_load();
 
-  char portStr[8];
-  snprintf(portStr, sizeof(portStr), "%u", g_settings.port);
+  char portStr[8], hbsecStr[8], hbcntStr[8];
+  snprintf(portStr,  sizeof(portStr),  "%u", g_settings.port);
+  snprintf(hbsecStr, sizeof(hbsecStr), "%u", g_settings.hb_timeout_s);
+  snprintf(hbcntStr, sizeof(hbcntStr), "%u", g_settings.hb_fail_count);
 
   WiFiManager wm;
   WiFiManagerParameter pGroup("group", "Multicast group", g_settings.group, 16);
   WiFiManagerParameter pPort ("port",  "Multicast port",  portStr, 8);
+  WiFiManagerParameter pHbSec("hbsec", "Heartbeat timeout s (0=off)", hbsecStr, 8);
+  WiFiManagerParameter pHbCnt("hbcnt", "Heartbeat fail count", hbcntStr, 8);
   wm.addParameter(&pGroup);
   wm.addParameter(&pPort);
+  wm.addParameter(&pHbSec);
+  wm.addParameter(&pHbCnt);
   wm.setAPCallback(on_portal);
 
   g_state = NetState::Connecting;
@@ -72,7 +78,14 @@ void net_begin() {
   }
   long port = atol(pPort.getValue());
   if (valid_port(port)) edited.port = (uint16_t)port;
-  if (strcmp(edited.group, g_settings.group) != 0 || edited.port != g_settings.port) {
+  long hbsec = atol(pHbSec.getValue());
+  if (hbsec >= 0 && hbsec <= 65535) edited.hb_timeout_s = (uint16_t)hbsec;
+  long hbcnt = atol(pHbCnt.getValue());
+  if (hbcnt >= 1 && hbcnt <= 50) edited.hb_fail_count = (uint8_t)hbcnt;
+  if (strcmp(edited.group, g_settings.group) != 0 ||
+      edited.port != g_settings.port ||
+      edited.hb_timeout_s != g_settings.hb_timeout_s ||
+      edited.hb_fail_count != g_settings.hb_fail_count) {
     settings_save(edited);
     g_settings = edited;
   }
@@ -124,3 +137,6 @@ NetState net_state() {
   if (g_portal && WiFi.status() != WL_CONNECTED) return NetState::Portal;
   return g_state;
 }
+
+uint32_t net_hb_timeout_ms() { return (uint32_t)g_settings.hb_timeout_s * 1000UL; }
+uint8_t  net_hb_fail_count() { return g_settings.hb_fail_count; }
