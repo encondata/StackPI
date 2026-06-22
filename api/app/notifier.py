@@ -42,16 +42,13 @@ DEFAULT_GROUP = "239.10.10.10"
 DEFAULT_PORT = 5005
 DURATION_MAX_MS = 600_000  # 10 min — a sanity ceiling, not a real limit
 
-# Reader traffic-light → stack light. A SOLID light per state (the firmware holds
-# solid indefinitely), driven by the status broadcaster on change + the 30s
-# keyframe. Only the "on" states are mapped; everything else (online-idle,
-# unconfigured, unknown) → OFF (brightness 0), so the light is dark when nothing
-# is happening and lights up for activity (reading) or faults (degraded/offline).
-READER_LIGHT_BY_STATE = {
-    "offline":  {"pattern": "solid", "color": "red"},     # fault — stays lit
-    "degraded": {"pattern": "solid", "color": "yellow"},   # warning — stays lit
-    "reading":  {"pattern": "solid", "color": "green"},    # actively reading (live)
-}
+# Reader traffic-light → stack light. The light is a 4-channel tower (separate
+# red/green/yellow/blue segments); a message only drives ITS OWN color's channel
+# and never clears the others. So to show a state we must set ALL FOUR channels
+# every time (the lit ones to brightness, the rest to 0) — otherwise a previously
+# lit color stays on (the "stuck green" bug). Colors mirror the on-screen reader
+# traffic light, which can co-light blue+green while reading.
+READER_LIGHT_COLORS = ("red", "green", "yellow", "blue")
 READER_LIGHT_BRIGHTNESS = 80
 
 
@@ -73,25 +70,20 @@ def _reader_light_enabled() -> bool:
     return _get_int(KEY_READER_LIGHT_ENABLE, 1, 0, 1) == 1
 
 
-def reader_light_message(state: Optional[str]) -> "LightMessage":
-    """The solid LightMessage for a reader traffic-light state. States not in the
-    map (online-idle / unconfigured / unknown) → off (solid, brightness 0) so the
-    stack light goes dark."""
-    spec = READER_LIGHT_BY_STATE.get(state or "")
-    if spec is None:
-        return LightMessage(pattern="solid", color="blue", brightness=0, duration=1000, repeat_count=1)
-    return LightMessage(
-        pattern=spec["pattern"], color=spec["color"],
-        brightness=READER_LIGHT_BRIGHTNESS, duration=1000, repeat_count=1,
-    )
-
-
-def send_reader_light(state: Optional[str]) -> bool:
-    """Multicast the reader traffic-light as a stack-light message. Gated by the
-    master notify-enable AND the reader-light toggle. Best-effort."""
+def send_reader_light(channels: Dict[str, bool]) -> bool:
+    """Drive the reader traffic-light tower to exactly `channels` (a dict of
+    color→on/off, e.g. {"blue": True, "green": True}). Sends one SOLID message per
+    color — lit ones at full brightness, the rest at 0 — so stale colors clear.
+    Gated by the master notify-enable AND the reader-light toggle. Best-effort."""
     if not _enabled() or not _reader_light_enabled():
         return False
-    return _emit(_light_payload(reader_light_message(state)), *_notify_target())
+    group, port = _notify_target()
+    ok = True
+    for color in READER_LIGHT_COLORS:
+        bright = READER_LIGHT_BRIGHTNESS if channels.get(color) else 0
+        msg = LightMessage(pattern="solid", color=color, brightness=bright, duration=1000, repeat_count=1)
+        ok = _emit(_light_payload(msg), group, port) and ok
+    return ok
 
 
 # ---------------------------------------------------------------------------

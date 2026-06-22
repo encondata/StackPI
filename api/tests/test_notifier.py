@@ -44,30 +44,27 @@ def test_send_light_respects_enable(monkeypatch) -> None:
     assert calls and calls[0]["type"] == "light"  # (p, group, port) — p captured
 
 
-def test_reader_light_message_mapping() -> None:
-    for state, color in [("offline", "red"), ("degraded", "yellow"), ("reading", "green")]:
-        m = nf.reader_light_message(state)
-        assert m.pattern == "solid" and m.color == color and m.brightness == 80
-    # idle-connected / unconfigured / unknown → OFF (solid, brightness 0)
-    for state in ("online", "unconfigured", None):
-        assert nf.reader_light_message(state).brightness == 0
+def test_send_reader_light_drives_all_channels(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(nf, "_emit", lambda p, g=None, port=None: calls.append(p) or True)
+    monkeypatch.setattr(nf, "_enabled", lambda: True)
+    monkeypatch.setattr(nf, "_reader_light_enabled", lambda: True)
+    # reading: blue + green lit, red + yellow off — all four sent so green clears
+    assert nf.send_reader_light({"blue": True, "green": True}) is True
+    assert len(calls) == 4 and all(c["type"] == "light" and c["pattern"] == "solid" for c in calls)
+    assert {c["color"]: c["brightness"] for c in calls} == {"red": 0, "green": 80, "yellow": 0, "blue": 80}
 
 
 def test_send_reader_light_gating(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(nf, "_emit", lambda p, g=None, port=None: calls.append(p) or True)
     monkeypatch.setattr(nf, "_enabled", lambda: True)
-    monkeypatch.setattr(nf, "_reader_light_enabled", lambda: True)
-    assert nf.send_reader_light("offline") is True
-    assert calls and calls[0]["type"] == "light" and calls[0]["color"] == "red"
-    # reader-light toggle off → no send
-    calls.clear()
     monkeypatch.setattr(nf, "_reader_light_enabled", lambda: False)
-    assert nf.send_reader_light("offline") is False and calls == []
+    assert nf.send_reader_light({"red": True}) is False and calls == []
     # master notify off → no send even if reader-light on
     monkeypatch.setattr(nf, "_reader_light_enabled", lambda: True)
     monkeypatch.setattr(nf, "_enabled", lambda: False)
-    assert nf.send_reader_light("offline") is False and calls == []
+    assert nf.send_reader_light({"red": True}) is False and calls == []
 
 
 # --- transport (_emit) ------------------------------------------------------

@@ -144,22 +144,26 @@ def test_build_snapshot_excludes_uptime(monkeypatch) -> None:
     assert "uptime" not in snap
 
 
-def test_reader_light_state_live_reading(monkeypatch) -> None:
-    # connected per the poll → 'reading' iff a scan arrived recently
-    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "online"})
-    monkeypatch.setattr(sb, "_recent_scan", lambda *a, **k: True)
-    assert sb._reader_light_state() == "reading"   # live scan overrides idle
-    monkeypatch.setattr(sb, "_recent_scan", lambda *a, **k: False)
-    assert sb._reader_light_state() == "online"     # no recent scan → idle (light off)
-    # the poll reporting 'reading' but no live scans → idle (don't trust stale radio)
-    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "reading"})
-    assert sb._reader_light_state() == "online"
-    # faults are independent of scans
-    monkeypatch.setattr(sb, "_recent_scan", lambda *a, **k: True)
-    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "offline"})
-    assert sb._reader_light_state() == "offline"
-    monkeypatch.setattr("app.rfid.get_active_reader", lambda: {"state": "degraded"})
-    assert sb._reader_light_state() == "degraded"
+def test_reader_light_channels_mirror_page(monkeypatch) -> None:
+    def readers(rs):
+        monkeypatch.setattr("app.rfid.list_readers", lambda: {"readers": rs})
+    conn = {"interfaceConnectionStatus": {"data": [{"connectionStatus": "connected"}]}}
+
+    # no enabled readers → all off
+    readers([{"enabled": False}])
+    assert sb.reader_light_channels() == {"red": False, "green": False, "yellow": False, "blue": False}
+    # idle connected → blue only
+    readers([{"enabled": True, "last_status": dict(conn, radioActivity="inactive")}])
+    assert sb.reader_light_channels() == {"red": False, "green": False, "yellow": False, "blue": True}
+    # reading → blue + green
+    readers([{"enabled": True, "last_status": dict(conn, radioActivity="active")}])
+    assert sb.reader_light_channels() == {"red": False, "green": True, "yellow": False, "blue": True}
+    # error / no status → red (exclusive)
+    readers([{"enabled": True, "last_error": "boom"}])
+    assert sb.reader_light_channels() == {"red": True, "green": False, "yellow": False, "blue": False}
+    # a connector down → yellow (exclusive)
+    readers([{"enabled": True, "last_status": {"interfaceConnectionStatus": {"data": [{"connectionStatus": "disconnected"}]}, "radioActivity": "active"}}])
+    assert sb.reader_light_channels() == {"red": False, "green": False, "yellow": True, "blue": False}
 
 
 def test_mark_dirty_noop_without_loop(monkeypatch) -> None:

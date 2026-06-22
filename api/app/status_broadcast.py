@@ -249,7 +249,7 @@ async def _run() -> None:
 
     last_sent: Optional[Dict[str, Any]] = None  # what receivers should now hold
     last_keyframe = 0.0
-    last_reader_state: Optional[str] = None      # last reader light we sent
+    last_reader_light: Optional[Dict[str, bool]] = None  # last tower channels we sent
     last_reader_kf = 0.0
     while True:
         try:
@@ -288,15 +288,14 @@ async def _run() -> None:
                 last_sent = None  # force a fresh keyframe when re-enabled
 
             # --- reader traffic-light → stack light (its own enable) ---------
-            # Independent of the display broadcast and of the display 'reader'
-            # toggle. 'reading' is live (recent scans), so a scan's mark_dirty()
-            # wakeup drives green within ~0.5s; re-send on the 30s keyframe so a
-            # just-powered-on light re-syncs.
-            reader_state = await loop.run_in_executor(None, _reader_light_state)
+            # Mirror the on-screen /status traffic light onto the physical tower.
+            # Drive all 4 channels (so stale colors clear) on a change, and
+            # re-send on the 30s keyframe so a just-powered-on tower re-syncs.
+            channels = await loop.run_in_executor(None, reader_light_channels)
             reader_kf = (now - last_reader_kf) >= KEYFRAME_SEC
-            if reader_state is not None and (reader_state != last_reader_state or reader_kf):
-                await loop.run_in_executor(None, notifier.send_reader_light, reader_state)
-                last_reader_state = reader_state
+            if channels != last_reader_light or reader_kf:
+                await loop.run_in_executor(None, notifier.send_reader_light, channels)
+                last_reader_light = channels
                 if reader_kf:
                     last_reader_kf = now
 
@@ -309,41 +308,52 @@ async def _run() -> None:
             await asyncio.sleep(HEARTBEAT_SEC)
 
 
-READING_WINDOW_SEC = 8  # a scan within this window ⇒ the reader is "reading"
+_LIGHT_OFF = {"red": False, "green": False, "yellow": False, "blue": False}
 
 
-def _recent_scan(window_sec: int = READING_WINDOW_SEC) -> bool:
-    """True if any RFID scan landed within the window — a real-time 'reading'
-    signal (scans hit local_rfid_raw_scans.received_at immediately, unlike the
-    5-minute polled radioActivity). Cheap: indexed on received_at."""
+def reader_light_channels() -> Dict[str, bool]:
+    """The reader traffic light as {red,green,yellow,blue} on/off — EXACTLY the
+    aggregate the on-screen /status light computes across enabled readers, so the
+    physical tower matches the page:
+      * red    : any reader has an error or no usable status yet (exclusive)
+      * yellow : every reader reachable but a connector is non-connected (exclusive)
+      * blue   : all connectors connected (idle-ready)
+      * green  : at least one reader actively reading (co-lights with blue)
+      * no enabled readers → all off
+    """
     try:
-        from app.db import _psql_scalar  # noqa: PLC0415
-        v = _psql_scalar(
-            "SELECT 1 FROM local_rfid_raw_scans "
-            f"WHERE received_at > NOW() - INTERVAL '{int(window_sec)} seconds' LIMIT 1"
+        from app.rfid import list_readers  # noqa: PLC0415
+        readers = (list_readers() or {}).get("readers") or []
+    except Exception:  # pragma: no cover - best effort
+        return dict(_LIGHT_OFF)
+
+    enabled = any_red = any_yellow = any_reading = 0
+    for r in readers:
+        if r.get("enabled") is False:
+            continue
+        enabled += 1
+        ls = r.get("last_status")
+        if r.get("last_error") or not isinstance(ls, dict):
+            any_red = 1
+            continue
+        if str(ls.get("radioActivity") or ls.get("radioActivitiy") or "").lower() == "active":
+            any_reading = 1
+        ics = ls.get("interfaceConnectionStatus")
+        data = ics.get("data") if isinstance(ics, dict) else None
+        interfaces = data if isinstance(data, list) else []
+        all_connected = len(interfaces) > 0 and all(
+            str((i or {}).get("connectionStatus") or "").lower() == "connected" for i in interfaces
         )
-        return v is not None
-    except Exception:  # pragma: no cover - best effort
-        return False
+        if not all_connected:
+            any_yellow = 1
 
-
-def _reader_light_state() -> Optional[str]:
-    """Reader state for the STACK LIGHT. Connection state (offline/degraded) comes
-    from the reader poll, but 'reading' is driven by live scan arrivals instead of
-    the 5-minute radioActivity — so green tracks truck activity within ~1s and
-    clears shortly after the last tag. Idle-connected ⇒ 'online' (light off)."""
-    try:
-        from app.rfid import get_active_reader  # noqa: PLC0415
-        ar = get_active_reader()
-    except Exception:  # pragma: no cover - best effort
-        return None
-    if not isinstance(ar, dict):
-        return None
-    base = ar.get("state")
-    if base in ("offline", "degraded", "unconfigured", None):
-        return base
-    # connected per the poll (online/reading) → override with live scan activity.
-    return "reading" if _recent_scan() else "online"
+    if not enabled:
+        return dict(_LIGHT_OFF)
+    if any_red:
+        return {"red": True, "green": False, "yellow": False, "blue": False}
+    if any_yellow:
+        return {"red": False, "green": False, "yellow": True, "blue": False}
+    return {"red": False, "green": bool(any_reading), "yellow": False, "blue": True}
 
 
 def start() -> "asyncio.Task":
