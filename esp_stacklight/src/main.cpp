@@ -7,6 +7,7 @@
 #include "notify.h"
 #include "web.h"
 #include "watchdog.h"
+#include "ota.h"
 
 static Lamps lamps;
 static bool g_statusOwns = true;       // does the status indicator currently own the lamps?
@@ -138,7 +139,8 @@ void setup() {
 
   net_begin();           // blocks until WiFi connect or portal timeout
   if (net_state() == NetState::Connected) {
-    web_begin();         // serve the test page once we have an IP
+    web_begin();         // serve the test page + /update (web OTA) once we have an IP
+    ota_begin();         // ArduinoOTA (pio/espota push)
   }
   Serial.println("[stacklight] setup done, entering main loop");
   g_lastMsgMs = millis();   // start the heartbeat watchdog clock from connect
@@ -178,6 +180,7 @@ void loop() {
 
   watchdog_update(now);
   web_handle();
+  ota_handle();
   lamps.update(now);
   delay(2);
 }

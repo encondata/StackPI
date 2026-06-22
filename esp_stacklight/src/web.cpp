@@ -1,9 +1,11 @@
 #include "web.h"
 #include "notify.h"
 #include "protocol.h"
+#include "config.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ElegantOTA.h>
 #include <string.h>
 
 static WebServer server(80);
@@ -98,8 +100,17 @@ void web_begin() {
   server.on("/sound", handleSound);
   server.on("/alloff", handleAllOff);
   server.on("/favicon.ico", []() { server.send(204); });   // quiet browser noise
+
+  // Web OTA at /update (firmware + filesystem upload from a browser).
+  if (strlen(OTA_PASSWORD) > 0) ElegantOTA.setAuth(OTA_USERNAME, OTA_PASSWORD);
+  ElegantOTA.begin(&server);
+
   server.begin();
-  Serial.printf("[web] test page: http://%s/\n", WiFi.localIP().toString().c_str());
+  Serial.printf("[web] test page: http://%s/   ·   OTA: http://%s/update\n",
+                WiFi.localIP().toString().c_str(), WiFi.localIP().toString().c_str());
 }
 
-void web_handle() { server.handleClient(); }
+void web_handle() {
+  server.handleClient();
+  ElegantOTA.loop();
+}

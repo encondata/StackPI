@@ -37,6 +37,13 @@
 // --- Boot sound (played once at startup; ignored if the WAV is missing) ---
 #define BOOT_SOUND_ID    "alert"
 
+// --- OTA updates ---
+#define OTA_HOSTNAME  "stacklight"   // mDNS name: stacklight.local
+// Optional OTA auth (empty password = no auth). Applies to both the pio/espota
+// push and the ElegantOTA web page.
+#define OTA_USERNAME  "admin"
+#define OTA_PASSWORD  ""
+
 // --- Heartbeat watchdog (operator-editable on the config page, saved to NVS) ---
 // Timeout in seconds with no multicast message before escalating. 0 = disabled.
 #define DEFAULT_HB_TIMEOUT_S  30
