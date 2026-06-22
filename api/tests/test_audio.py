@@ -78,6 +78,23 @@ def test_audio_config_post_persists(monkeypatch) -> None:
     assert persisted["audio_volume_pct"] == "70"
 
 
+def test_audio_config_accepts_overdrive_volume(monkeypatch) -> None:
+    persisted = {}
+    monkeypatch.setattr("app.settings._persist_setting", lambda k, v: persisted.__setitem__(k, v) or True)
+    monkeypatch.setattr(audio, "list_sounds", lambda: ["alert.wav"])
+    monkeypatch.setattr("app.settings._get_setting_str", lambda k, d: d)
+    monkeypatch.setattr("app.settings._get_setting_int", lambda k, d, lo, hi: d)
+    base = {
+        "error": {"sound_file": "alert.wav", "enabled": True},
+        "alert": {"sound_file": "none", "enabled": False},
+        "info": {"sound_file": "none", "enabled": False},
+    }
+    ok = client.post("/local/audio/config", json={**base, "volume_pct": audio.VOLUME_MAX})
+    assert ok.status_code == 200 and persisted["audio_volume_pct"] == str(audio.VOLUME_MAX)
+    bad = client.post("/local/audio/config", json={**base, "volume_pct": audio.VOLUME_MAX + 1})
+    assert bad.status_code == 422  # above the overdrive ceiling
+
+
 def test_audio_config_post_rejects_unknown_sound(monkeypatch) -> None:
     monkeypatch.setattr(audio, "list_sounds", lambda: ["alert.wav"])
     r = client.post(

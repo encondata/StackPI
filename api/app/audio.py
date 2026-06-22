@@ -29,6 +29,7 @@ CATEGORIES = ("error", "alert", "info")
 SOUNDS_DIR = "/etc/stackpi/sounds"          # deploy.sh chowns this to csg
 SOUND_NONE = "none"                          # selectable "silent" option
 VOLUME_DEFAULT = 80
+VOLUME_MAX = 400                             # >100% overdrives (software gain; may clip)
 DEBOUNCE_SEC = 2.0                           # per-category min spacing (anti-spam)
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 ALLOWED_EXT = {".wav", ".mp3", ".ogg"}
@@ -72,16 +73,33 @@ def _category_sound(cat: str) -> str:
 
 
 def _play_file(filename: str, volume: int) -> None:
-    """Play a WAV non-blocking. Silent for 'none' / volume 0 / missing file.
-    Prefers paplay (PipeWire/Pulse, scaled volume) then aplay (ALSA)."""
+    """Play a sound non-blocking at `volume` percent. Silent for 'none' /
+    volume 0 / missing file. Volume can exceed 100% (overdrive): aplay has no
+    gain, so we apply software gain with ffmpeg and pipe to aplay; >100% boosts
+    the level (and may clip — that's the point). Falls back to paplay then plain
+    aplay where ffmpeg is absent."""
     if not filename or filename.lower() == SOUND_NONE or volume <= 0:
         return
     path = os.path.join(SOUNDS_DIR, os.path.basename(filename))
     if not os.path.exists(path):
         log.warning("audio file not found: %s", path)
         return
-    pa_vol = max(0, min(65536, int(65536 * volume / 100)))
+    factor = volume / 100.0  # 1.0 = 100%; >1 amplifies
+    if shutil.which("ffmpeg"):
+        try:
+            ff = subprocess.Popen(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path,
+                 "-filter:a", f"volume={factor:.3f}", "-f", "wav", "pipe:1"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["aplay", "-q", "-"], stdin=ff.stdout,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ff.stdout.close()  # aplay owns the read end; ffmpeg SIGPIPEs when done
+            return
+        except OSError:
+            pass
+    # Fallbacks: paplay scales volume (and can exceed 100%), then plain aplay.
     try:
+        pa_vol = max(0, min(65536 * 4, int(65536 * factor)))
         subprocess.Popen(["paplay", f"--volume={pa_vol}", path],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
@@ -91,7 +109,7 @@ def _play_file(filename: str, volume: int) -> None:
         subprocess.Popen(["aplay", "-q", path],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
-        log.warning("audio playback failed (no paplay/aplay?): %s", e)
+        log.warning("audio playback failed (no ffmpeg/paplay/aplay?): %s", e)
 
 
 def play(category: str) -> None:
@@ -104,7 +122,7 @@ def play(category: str) -> None:
         if last is not None and (now - last) < DEBOUNCE_SEC:
             return
         _last_played[category] = now
-        _play_file(_category_sound(category), _get_int(KEY_VOLUME, VOLUME_DEFAULT, 0, 100))
+        _play_file(_category_sound(category), _get_int(KEY_VOLUME, VOLUME_DEFAULT, 0, VOLUME_MAX))
     except Exception as e:  # pragma: no cover - audio must never break a caller
         log.warning("audio play(%s) failed: %s", category, e)
 
@@ -149,7 +167,8 @@ def get_audio_config() -> dict:
             }
             for c in CATEGORIES
         ],
-        "volume_pct": _get_int(KEY_VOLUME, VOLUME_DEFAULT, 0, 100),
+        "volume_pct": _get_int(KEY_VOLUME, VOLUME_DEFAULT, 0, VOLUME_MAX),
+        "volume_max": VOLUME_MAX,
         "sounds": [SOUND_NONE, *list_sounds()],
         "allowed_ext": sorted(ALLOWED_EXT),
     }
@@ -164,7 +183,7 @@ class AudioConfigRequest(BaseModel):
     error: CategoryCfg
     alert: CategoryCfg
     info: CategoryCfg
-    volume_pct: int = Field(ge=0, le=100)
+    volume_pct: int = Field(ge=0, le=VOLUME_MAX)
 
 
 @router.post("/config")
@@ -239,5 +258,5 @@ def test_audio(body: TestRequest) -> dict:
     category's enable toggle — it's an explicit test)."""
     if body.category not in CATEGORIES:
         raise HTTPException(status_code=400, detail="unknown category")
-    _play_file(_category_sound(body.category), _get_int(KEY_VOLUME, VOLUME_DEFAULT, 0, 100))
+    _play_file(_category_sound(body.category), _get_int(KEY_VOLUME, VOLUME_DEFAULT, 0, VOLUME_MAX))
     return {"ok": True}

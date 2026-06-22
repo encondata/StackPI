@@ -22,6 +22,7 @@ export default function AudioPage() {
   const [sounds, setSounds] = useState<string[]>([]);
   const [allowed, setAllowed] = useState<string[]>([".wav"]);
   const [volume, setVolume] = useState(80);
+  const [volumeMax, setVolumeMax] = useState(400);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -30,6 +31,7 @@ export default function AudioPage() {
   type Cfg = {
     categories: CatRow[];
     volume_pct: number;
+    volume_max?: number;
     sounds: string[];
     allowed_ext?: string[];
   };
@@ -38,6 +40,7 @@ export default function AudioPage() {
     setRows(d.categories ?? []);
     setSounds(d.sounds ?? []);
     setVolume(d.volume_pct ?? 80);
+    if (d.volume_max) setVolumeMax(d.volume_max);
     if (d.allowed_ext) setAllowed(d.allowed_ext);
   }
 
@@ -178,15 +181,20 @@ export default function AudioPage() {
         </div>
 
         <label className="mt-5 block max-w-xs">
-          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Volume ({volume}%)</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Volume ({volume}%){volume > 100 && <span className="ml-1 font-normal text-amber-600">overdrive</span>}
+          </span>
           <input
             type="range"
             min={0}
-            max={100}
+            max={volumeMax}
             value={volume}
             onChange={(e) => setVolume(Number(e.target.value))}
             className="mt-1 w-full"
           />
+          <span className="block text-[11px] text-zinc-400">
+            Above 100% amplifies in software (louder, but may distort) — up to {volumeMax}%.
+          </span>
         </label>
 
         {banner && (
