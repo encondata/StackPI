@@ -442,6 +442,43 @@ def _extract_hostname(obj: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# The FX9600's standard model description. Some firmware reports the reader's
+# name field as "<name> <description>" (e.g. "FX9600647D23 FX9600 RFID Reader"),
+# but the cloud keys readers by the short name alone ("FX9600647D23").
+_MODEL_DESC_SUFFIXES = ("FX9600 RFID Reader", "RFID Reader")
+
+
+def _reader_name_from_nd(nd: Dict[str, Any]) -> Optional[str]:
+    """Pull the reader's short name from a /cloud/nameAndDescription body.
+
+    Returns just the name (e.g. "FX9600647D23"), stripping a trailing model
+    description when the firmware embeds it in the name field. Uses the explicit
+    description field when present, then falls back to the known FX9600 model
+    suffixes. Returns None if no name field is present.
+    """
+    if not isinstance(nd, dict):
+        return None
+    name = None
+    for key in ("readerName", "name", "hostName", "hostname"):
+        v = nd.get(key)
+        if isinstance(v, str) and v.strip():
+            name = v.strip()
+            break
+    if not name:
+        return None
+    suffixes = []
+    for dkey in ("description", "readerDescription", "desc"):
+        d = nd.get(dkey)
+        if isinstance(d, str) and d.strip():
+            suffixes.append(d.strip())
+    suffixes.extend(_MODEL_DESC_SUFFIXES)
+    for suffix in suffixes:
+        if name != suffix and name.endswith(suffix):
+            name = name[: -len(suffix)].strip()
+            break
+    return name or None
+
+
 @router.post("/readers/probe")
 def probe_reader(body: ReaderProbeRequest) -> Dict[str, Any]:
     """Validate a reader is reachable (login + status) and return a
@@ -475,7 +512,9 @@ def probe_reader(body: ReaderProbeRequest) -> Dict[str, Any]:
     name = None
     try:
         name_and_description = rfid_status._get_name_and_description(reader, token)
-        name = _extract_hostname(name_and_description)
+        # Logged so the exact field shape can be confirmed against live readers.
+        log.info("reader %s nameAndDescription: %r", reader["address"], name_and_description)
+        name = _reader_name_from_nd(name_and_description)
     except Exception as e:  # noqa: BLE001 - naming is best-effort
         log.warning("nameAndDescription fetch failed for %s: %s", reader["address"], e)
     hostname = name or _extract_hostname(status) or reader["address"]

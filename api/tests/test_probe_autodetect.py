@@ -32,6 +32,17 @@ def test_probe_prefers_name_and_description(monkeypatch):
     assert out["name_and_description"] == {"name": "DockDoor3"}
 
 
+def test_probe_strips_model_description_from_name(monkeypatch):
+    # The live-reported case: the reader's name field embeds the model
+    # description; the cloud keys on the short name only.
+    nd = {"name": "FX9600647D23 FX9600 RFID Reader", "description": "FX9600 RFID Reader"}
+    monkeypatch.setattr(rfid_status, "connect_autodetect", lambda reader: ("https", "tok"))
+    monkeypatch.setattr(rfid_status, "_get_name_and_description", lambda reader, token: nd)
+    monkeypatch.setattr(rfid_status, "_get_status", lambda reader, token: {})
+    out = probe_reader(ReaderProbeRequest(address="10.10.48.119", password="pw"))
+    assert out["hostname"] == "FX9600647D23"
+
+
 def test_probe_name_fetch_failure_falls_back_to_status(monkeypatch):
     def boom(reader, token):
         raise RuntimeError("nameAndDescription HTTP 404")
