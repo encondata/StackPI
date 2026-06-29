@@ -260,13 +260,20 @@ def set_polling_refresh_minutes(minutes: int) -> int:
 # ---------------------------------------------------------------------------
 
 def _base_url(reader: Dict[str, Any]) -> str:
-    scheme = (reader.get("scheme") or "http").strip()
+    scheme = (reader.get("scheme") or "http").strip().lower()
     host = (reader.get("address") or "").strip()
-    port_val = reader.get("port")
+    default_port = 443 if scheme == "https" else 80
+    # The port column is an *override*. When it is empty or set to a standard
+    # web port (80/443), the URL follows the scheme's default — so flipping
+    # http->https moves :80 to :443 without the operator hand-editing the port.
+    # Only a genuinely non-standard port (e.g. 8080) overrides the scheme.
     try:
-        port = int(port_val) if port_val is not None else (80 if scheme == "http" else 443)
+        port = int(reader.get("port"))
     except (TypeError, ValueError):
-        port = 80 if scheme == "http" else 443
+        port = default_port
+    else:
+        if port in (80, 443):
+            port = default_port
     return f"{scheme}://{host}:{port}"
 
 
