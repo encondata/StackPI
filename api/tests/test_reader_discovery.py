@@ -49,12 +49,13 @@ def test_discover_returns_only_confirmed_readers(monkeypatch):
     # Only 10.0.0.1 is a real reader, and only over https.
     monkeypatch.setattr(rfid_mod, "_is_ziotc_reader",
                         lambda scheme, ip, timeout=1.0: ip == "10.0.0.1" and scheme == "https")
+    monkeypatch.setattr(rfid_mod, "_enrich_reader_name", lambda scheme, ip: (None, None))
 
     out = discover_readers()
     assert out["scanned_count"] == 2
     assert out["readers"] == [
         {"ip": "10.0.0.1", "scheme": "https", "port": 443,
-         "name": None, "source": "scan", "confirmed": True}
+         "name": None, "source": "scan", "confirmed": True, "cred_index": None}
     ]
 
 
@@ -65,6 +66,7 @@ def test_discover_prefers_https_when_both_open(monkeypatch):
                         lambda host, port, timeout: host if host == "10.0.0.1" else None)
     # Confirms on both schemes; dedupe must keep https only.
     monkeypatch.setattr(rfid_mod, "_is_ziotc_reader", lambda scheme, ip, timeout=1.0: ip == "10.0.0.1")
+    monkeypatch.setattr(rfid_mod, "_enrich_reader_name", lambda scheme, ip: (None, None))
     out = discover_readers()
     assert len(out["readers"]) == 1
     assert out["readers"][0]["scheme"] == "https"
@@ -79,3 +81,62 @@ def test_discover_no_subnet_raises_500(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         discover_readers()
     assert ei.value.status_code == 500
+
+
+from app import rfid_status
+
+
+def test_enrich_first_success_returns_index_and_name(monkeypatch):
+    from app.rfid import _enrich_reader_name
+    tried = []
+
+    def fake_login(reader):
+        tried.append(reader["admin_password"])
+        if reader["admin_password"] == "Cumulu$SG.":
+            return "tok"
+        raise RuntimeError("bad password")
+
+    monkeypatch.setattr(rfid_status, "_login", fake_login)
+    monkeypatch.setattr(rfid_status, "_get_name_and_description",
+                        lambda reader, token: {"name": "FX9600647D23 FX9600 RFID Reader",
+                                               "description": "FX9600 RFID Reader"})
+    name, idx = _enrich_reader_name("https", "10.0.0.5")
+    assert (name, idx) == ("FX9600647D23", 1)
+    assert tried == ["Cumulu$SG0", "Cumulu$SG."]  # stopped at first success
+
+
+def test_enrich_no_password_works(monkeypatch):
+    from app.rfid import _enrich_reader_name
+
+    def fail(reader):
+        raise RuntimeError("bad password")
+
+    monkeypatch.setattr(rfid_status, "_login", fail)
+    assert _enrich_reader_name("https", "10.0.0.5") == (None, None)
+
+
+def test_enrich_login_ok_but_name_fetch_fails(monkeypatch):
+    from app.rfid import _enrich_reader_name
+    monkeypatch.setattr(rfid_status, "_login", lambda reader: "tok")
+
+    def boom(reader, token):
+        raise RuntimeError("nd 500")
+
+    monkeypatch.setattr(rfid_status, "_get_name_and_description", boom)
+    name, idx = _enrich_reader_name("https", "10.0.0.5")
+    assert name is None and idx == 0
+
+
+def test_discover_includes_name_and_cred_index(monkeypatch):
+    from app.rfid import discover_readers
+    monkeypatch.setattr(rfid_mod, "_primary_local_cidr", lambda: "10.0.0.0/30")
+    monkeypatch.setattr(rfid_mod, "_probe",
+                        lambda h, p, t: h if (h == "10.0.0.1" and p == 443) else None)
+    monkeypatch.setattr(rfid_mod, "_is_ziotc_reader",
+                        lambda scheme, ip, timeout=1.0: scheme == "https")
+    monkeypatch.setattr(rfid_mod, "_enrich_reader_name", lambda scheme, ip: ("FX9600X", 0))
+    out = discover_readers()
+    assert out["readers"] == [
+        {"ip": "10.0.0.1", "scheme": "https", "port": 443, "name": "FX9600X",
+         "source": "scan", "confirmed": True, "cred_index": 0}
+    ]

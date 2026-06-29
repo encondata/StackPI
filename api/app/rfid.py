@@ -323,6 +323,38 @@ def _primary_local_cidr() -> Optional[str]:
     return None
 
 
+# Built-in admin passwords tried, in order, to read a discovered reader's name.
+# The cloud keys readers by name; the operator's fleet uses these defaults.
+_DEFAULT_READER_PASSWORDS = ("Cumulu$SG0", "Cumulu$SG.", "changeme")
+
+
+def _enrich_reader_name(scheme: str, ip: str):
+    """Try the default admin passwords against a confirmed reader to read its
+    name. Returns (name, cred_index): the short name (or None) and the index of
+    the first password that logged in (or None if none did). Stops at the first
+    successful login."""
+    from app import rfid_status  # noqa: PLC0415
+    for idx, password in enumerate(_DEFAULT_READER_PASSWORDS):
+        reader = {
+            "address": ip,
+            "scheme": scheme,
+            "port": None,
+            "admin_username": "admin",
+            "admin_password": password,
+        }
+        try:
+            token = rfid_status._login(reader)
+        except Exception:
+            continue
+        try:
+            nd = rfid_status._get_name_and_description(reader, token)
+            name = _reader_name_from_nd(nd)
+        except Exception:
+            name = None
+        return (name, idx)
+    return (None, None)
+
+
 def _is_ziotc_reader(scheme: str, ip: str, timeout: float = ZIOTC_CONFIRM_TIMEOUT_SEC) -> bool:
     """Credential-free check that a host runs the Zebra ZIOTC REST API.
 
@@ -405,13 +437,16 @@ def discover_readers() -> Dict[str, Any]:
     def _confirm(ip: str, ports: set) -> Optional[Dict[str, Any]]:
         for port in (443, 80):
             if port in ports and _is_ziotc_reader(_scheme_for_port(port), ip):
+                scheme = _scheme_for_port(port)
+                name, cred_index = _enrich_reader_name(scheme, ip)
                 return {
                     "ip": ip,
-                    "scheme": _scheme_for_port(port),
+                    "scheme": scheme,
                     "port": port,
-                    "name": None,
+                    "name": name,
                     "source": "scan",
                     "confirmed": True,
+                    "cred_index": cred_index,
                 }
         return None
 
