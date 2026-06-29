@@ -1553,10 +1553,19 @@ async function fetchPiLanIp(): Promise<string | null> {
   }
 }
 
+type DiscoveredReader = {
+  ip: string;
+  scheme: string;
+  port: number;
+  name: string | null;
+  source: string;
+  confirmed: boolean;
+};
+
 type ScanResult = {
   subnet: string;
   scanned_count: number;
-  responded: Array<{ ip: string; port: number }>;
+  readers: DiscoveredReader[];
   took_seconds: number;
 };
 
@@ -1614,7 +1623,7 @@ function AddReaderModal({
       const res = await fetch("/local/rfid/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ port: Number(form.port) || 443 }),
+        body: JSON.stringify({}),
       });
       const body = await res.json().catch(() => null);
       if (res.ok && body) setScanResult(body as ScanResult);
@@ -1626,8 +1635,8 @@ function AddReaderModal({
     }
   }
 
-  function pickIp(ip: string) {
-    setForm((f) => ({ ...f, address: ip }));
+  function pickReader(r: DiscoveredReader) {
+    setForm((f) => ({ ...f, address: r.ip, scheme: r.scheme as "http" | "https", port: String(r.port) }));
   }
 
   return (
@@ -1644,8 +1653,8 @@ function AddReaderModal({
         <h3 className="text-lg font-semibold">Add a new RFID reader</h3>
         <p className="mt-1 text-xs text-zinc-500">
           Default model is Zebra FX9600 — communicates via the IoT Connector
-          REST API on HTTPS:443. Use Scan to find readers on this subnet, or
-          enter the IP manually.
+          REST API. Use Scan to find Zebra readers on this subnet (HTTP or
+          HTTPS), or enter the IP manually.
         </p>
 
         <div className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 p-3">
@@ -1659,9 +1668,7 @@ function AddReaderModal({
               disabled={scanning || busy}
               className="rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:bg-zinc-400"
             >
-              {scanning
-                ? "Scanning…"
-                : `Scan port ${form.port || "443"} on local subnet`}
+              {scanning ? "Scanning…" : "Scan local subnet for Zebra readers"}
             </button>
           </div>
           {scanError && <p className="mt-2 text-xs text-red-700">{scanError}</p>}
@@ -1670,27 +1677,29 @@ function AddReaderModal({
               <p className="text-zinc-500">
                 Scanned <span className="font-mono">{scanResult.subnet}</span>{" "}
                 ({scanResult.scanned_count} hosts) in{" "}
-                {scanResult.took_seconds}s — {scanResult.responded.length}{" "}
-                responded.
+                {scanResult.took_seconds}s — {scanResult.readers.length} Zebra
+                reader{scanResult.readers.length === 1 ? "" : "s"} found.
               </p>
-              {scanResult.responded.length === 0 ? (
+              {scanResult.readers.length === 0 ? (
                 <p className="mt-1 italic text-zinc-400">
-                  No reader-shaped hosts found on this port.
+                  No Zebra readers found on this subnet.
                 </p>
               ) : (
                 <ul className="mt-2 divide-y divide-zinc-200 overflow-hidden rounded border border-zinc-200 bg-white">
-                  {scanResult.responded.map((r) => (
+                  {scanResult.readers.map((r) => (
                     <li
                       key={r.ip}
                       className="flex items-center justify-between px-3 py-1.5"
                     >
                       <span className="font-mono text-zinc-800">
                         {r.ip}
-                        <span className="ml-1 text-zinc-400">:{r.port}</span>
+                        <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                          {r.scheme}
+                        </span>
                       </span>
                       <button
                         type="button"
-                        onClick={() => pickIp(r.ip)}
+                        onClick={() => pickReader(r)}
                         className="rounded border border-zinc-200 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
                       >
                         Use this
