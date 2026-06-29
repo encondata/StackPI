@@ -1,9 +1,58 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { applyPhysicalKey } from "./physicalKey";
 import { Delete, ArrowBigUp, CornerDownLeft } from "lucide-react";
 
 type Layout = "full" | "numeric";
+
+function isEditableTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || el.isContentEditable;
+}
+
+/**
+ * While mounted, lets a physically-attached keyboard drive the same value the
+ * on-screen keyboard edits. Scoped to whichever field is active because only
+ * one OnScreenKeyboard is mounted at a time. Latest props are read through a
+ * ref so the window listener is bound once.
+ */
+function usePhysicalKeyboard({
+  value,
+  onChange,
+  onEnter,
+  layout,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onEnter?: () => void;
+  layout: Layout;
+}) {
+  const ref = useRef({ value, onChange, onEnter, layout });
+  ref.current = { value, onChange, onEnter, layout };
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (isEditableTarget(e.target)) return;
+      const { value: v, onChange: oc, onEnter: oe, layout: lay } = ref.current;
+      const hasModifier = e.ctrlKey || e.metaKey || e.altKey;
+      const res = applyPhysicalKey(v, e.key, lay, hasModifier);
+      if (!res.handled) return;
+      e.preventDefault();
+      if (res.enter) {
+        oe?.();
+      } else if (res.value !== v) {
+        oc(res.value);
+      } else if (e.key === "Backspace") {
+        oc(res.value); // keep state consistent on empty-backspace
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
 
 // On-screen keyboard for the touchscreen kiosk. `full` = alphanumeric+symbols
 // (WiFi passwords); `numeric` = digits + "." (IP entry). Stateless w.r.t. the
@@ -21,6 +70,8 @@ export function OnScreenKeyboard({
 }) {
   const [shift, setShift] = useState(false);
   const [sym, setSym] = useState(false);
+
+  usePhysicalKeyboard({ value, onChange, onEnter, layout });
 
   const press = (ch: string) => onChange(value + ch);
   const backspace = () => onChange(value.slice(0, -1));
