@@ -329,7 +329,7 @@ export function StepReader({ state, update }: StepProps) {
               key={d.ip}
               type="button"
               onClick={() => adoptDiscovered(d)}
-              disabled={busyAdopt === d.ip}
+              disabled={busyAdopt != null}
               className="flex items-center gap-3 rounded-xl border border-blue-900 bg-blue-950/30 px-4 py-3 text-left disabled:opacity-60"
             >
               <EthernetPort className="h-5 w-5 text-zinc-400" aria-hidden />

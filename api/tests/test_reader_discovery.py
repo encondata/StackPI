@@ -183,3 +183,25 @@ def test_adopt_login_failure_502(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         adopt_reader(AdoptReaderRequest(address="10.0.0.5", scheme="https", cred_index=0))
     assert ei.value.status_code == 502
+
+
+def test_create_reader_rejects_duplicate_address(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from app.rfid import create_reader, ReaderCreateRequest
+    monkeypatch.setattr(rfid_mod, "_psql_json",
+                        lambda sql: [1] if "where address" in sql.lower() else None)
+    with pytest.raises(HTTPException) as ei:
+        create_reader(ReaderCreateRequest(name="Dup", address="10.0.0.5"))
+    assert ei.value.status_code == 409
+
+
+def test_create_reader_inserts_when_address_is_new(monkeypatch):
+    from app.rfid import create_reader, ReaderCreateRequest
+    monkeypatch.setattr(rfid_mod, "_psql_json",
+                        lambda sql: [] if "where address" in sql.lower() else None)
+    monkeypatch.setattr(rfid_mod, "_psql_exec_with_params", lambda sql, params: True)
+    monkeypatch.setattr(rfid_mod, "list_readers",
+                        lambda: {"readers": [{"name": "New"}], "counts": {}})
+    out = create_reader(ReaderCreateRequest(name="New", address="10.0.0.9"))
+    assert out["readers"][0]["name"] == "New"

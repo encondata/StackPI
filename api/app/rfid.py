@@ -199,11 +199,27 @@ def list_readers() -> Dict[str, Any]:
 @router.post("/readers")
 def create_reader(body: ReaderCreateRequest) -> Dict[str, Any]:
     """Insert a new reader row. Returns the updated full payload."""
+    address = body.address.strip()
+
+    # Reject a second reader on the same address (e.g. a double-tap during an
+    # adopt, or re-adding an already-configured IP). The single-quote doubling
+    # keeps the address safe inside the SQL literal.
+    addr_lit = address.replace("'", "''")
+    existing = _psql_json(
+        "SELECT COALESCE(jsonb_agg(id), '[]'::jsonb) FROM "
+        f"(SELECT id FROM local_rfid_readers WHERE address = '{addr_lit}' LIMIT 1) t"
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a reader with address {address} already exists",
+        )
+
     params = {
         "name": body.name.strip(),
         "reader_type": (body.reader_type or "").strip() or None,
         "scheme": (body.scheme or "http").strip(),
-        "address": body.address.strip(),
+        "address": address,
         "port": body.port if body.port is not None else "NULL",
         "antennas": body.antennas if body.antennas is not None else "NULL",
         "admin_username": (body.admin_username or "admin").strip() or "admin",
