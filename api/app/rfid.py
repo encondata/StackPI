@@ -447,22 +447,26 @@ def probe_reader(body: ReaderProbeRequest) -> Dict[str, Any]:
     best-effort hostname for naming, WITHOUT persisting. Used by the
     Initial Setup wizard's 'Add reader' step."""
     from app import rfid_status  # noqa: PLC0415
+    from app.rfid_status import ReaderAuthError  # noqa: PLC0415
 
     reader = {
-        "scheme": (body.scheme or "https").strip() or "https",
         "address": body.address.strip(),
         "port": body.port,
         "admin_username": (body.admin_username or "admin").strip() or "admin",
         "admin_password": body.password or "",
     }
     try:
-        token = rfid_status._login(reader)
+        scheme, token = rfid_status.connect_autodetect(reader)
+        reader["scheme"] = scheme
         status = rfid_status._get_status(reader, token)
-    except Exception as e:  # login/status raise RuntimeError on failure
+    except ReaderAuthError as e:
+        log.warning("reader probe auth failure for %s: %s", reader["address"], e)
+        raise HTTPException(status_code=401, detail="authentication failed — check admin password")
+    except Exception as e:
         log.warning("reader probe failed for %s: %s", reader["address"], e)
         raise HTTPException(status_code=502, detail=f"could not reach reader: {e}")
     hostname = _extract_hostname(status) or reader["address"]
-    return {"ok": True, "hostname": hostname, "status": status}
+    return {"ok": True, "scheme": scheme, "hostname": hostname, "status": status}
 
 
 # ---------------------------------------------------------------------------
