@@ -763,6 +763,13 @@ def set_endpoint_url(reader_id: int, url: str) -> Dict[str, Any]:
         return {"ok": False, "reader_id": rid, "error": "reader has no address"}
     try:
         token = _login(reader)
+        # Prime: PUT the config back unchanged once so the reader normalizes
+        # READER-GATEWAY/xml first. Applying a structural change (a new endpoint
+        # connection) at the same time as that one-time normalization is rejected
+        # with HTTP 422 (batching count / vendor file paths / "invalid temperature
+        # object", depending on what is un-normalized — common right after the
+        # endpoints are erased on the reader). A normalized config applies cleanly.
+        _put_config(reader, token, _get_config(reader, token))
         config = _get_config(reader, token)
         _apply_endpoint_url(config, url)
         _put_config(reader, token, config)
