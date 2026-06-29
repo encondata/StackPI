@@ -14,6 +14,16 @@ type Reader = {
   last_error: string | null;
 };
 
+type DiscoveredReader = {
+  ip: string;
+  scheme: string;
+  port: number;
+  name: string | null;
+  source: string;
+  confirmed: boolean;
+  cred_index: number | null;
+};
+
 function isOnline(r: Reader): boolean {
   return !r.last_error && r.last_status != null;
 }
@@ -45,6 +55,64 @@ export function StepReader({ state, update }: StepProps) {
   const [epMsg, setEpMsg] = useState<string | null>(null);
   const [epUrl, setEpUrl] = useState<string | null>(null);
   const mounted = useRef(true);
+
+  const [scanning, setScanning] = useState(false);
+  const [discovered, setDiscovered] = useState<DiscoveredReader[]>([]);
+  const [scanErr, setScanErr] = useState<string | null>(null);
+  const [busyAdopt, setBusyAdopt] = useState<string | null>(null);
+  const [prefillIp, setPrefillIp] = useState("");
+
+  async function scanForReaders() {
+    setScanning(true);
+    setScanErr(null);
+    try {
+      const r = await fetch("/local/rfid/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const b = (await r.json().catch(() => null)) as
+        | { readers?: DiscoveredReader[]; detail?: string }
+        | null;
+      if (r.ok && b) setDiscovered(b.readers ?? []);
+      else setScanErr(b?.detail ?? "Scan failed.");
+    } catch {
+      setScanErr("Scan failed.");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function adoptDiscovered(d: DiscoveredReader) {
+    if (d.cred_index == null) {
+      setPrefillIp(d.ip);
+      setAdding(true);
+      return;
+    }
+    setBusyAdopt(d.ip);
+    setScanErr(null);
+    try {
+      const r = await fetch("/local/rfid/readers/adopt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: d.ip, scheme: d.scheme, cred_index: d.cred_index }),
+      });
+      const b = (await r.json().catch(() => null)) as { detail?: string } | null;
+      if (!r.ok) {
+        setScanErr(b?.detail ?? "Could not add reader.");
+        return;
+      }
+      setDiscovered((xs) => xs.filter((x) => x.ip !== d.ip));
+      const list = await refresh();
+      const added = list.find((x) => x.address === d.ip);
+      if (added && isOnline(added)) select(added);
+      else if (added) update({ readerName: added.name, endpointVerified: false });
+    } catch {
+      setScanErr("Could not add reader.");
+    } finally {
+      setBusyAdopt(null);
+    }
+  }
 
   useEffect(() => {
     return () => {
@@ -187,15 +255,24 @@ export function StepReader({ state, update }: StepProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <LoadingOverlay show={loading} label="Checking readers…" />
-      <div className="flex items-center">
+      <div className="flex items-center gap-2">
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
           Connected readers
         </p>
         <button
           type="button"
+          onClick={scanForReaders}
+          disabled={scanning}
+          className="ml-auto flex h-8 items-center gap-1.5 rounded-lg border border-blue-800 bg-blue-950/40 px-3 text-xs text-blue-200 disabled:opacity-50"
+        >
+          <RotateCw className={"h-3.5 w-3.5 " + (scanning ? "animate-spin" : "")} />
+          {scanning ? "Scanning..." : "Scan for readers"}
+        </button>
+        <button
+          type="button"
           onClick={refresh}
           disabled={loading}
-          className="ml-auto flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 text-xs text-zinc-300 disabled:opacity-50"
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 text-xs text-zinc-300 disabled:opacity-50"
         >
           <RotateCw className={"h-3.5 w-3.5 " + (loading ? "animate-spin" : "")} />
           Recheck
@@ -244,6 +321,36 @@ export function StepReader({ state, update }: StepProps) {
             </button>
           );
         })}
+        {scanErr && <p className="text-xs text-red-400">{scanErr}</p>}
+        {discovered
+          .filter((d) => !readers.some((r) => r.address === d.ip))
+          .map((d) => (
+            <button
+              key={d.ip}
+              type="button"
+              onClick={() => adoptDiscovered(d)}
+              disabled={busyAdopt === d.ip}
+              className="flex items-center gap-3 rounded-xl border border-blue-900 bg-blue-950/30 px-4 py-3 text-left disabled:opacity-60"
+            >
+              <EthernetPort className="h-5 w-5 text-zinc-400" aria-hidden />
+              <div>
+                <div className="text-zinc-100">{d.name ?? d.ip}</div>
+                <div className="font-mono text-xs text-zinc-500">
+                  {d.ip}
+                  <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                    {d.scheme}
+                  </span>
+                </div>
+              </div>
+              <span className="ml-auto text-xs font-semibold text-blue-300">
+                {busyAdopt === d.ip
+                  ? "Adding..."
+                  : d.cred_index == null
+                    ? "Add manually"
+                    : "Add"}
+              </span>
+            </button>
+          ))}
         <button
           type="button"
           onClick={() => setAdding(true)}
@@ -305,9 +412,14 @@ export function StepReader({ state, update }: StepProps) {
 
       {adding && (
         <AddReaderPanel
-          onClose={() => setAdding(false)}
+          initialIp={prefillIp}
+          onClose={() => {
+            setAdding(false);
+            setPrefillIp("");
+          }}
           onAdded={async (name) => {
             setAdding(false);
+            setPrefillIp("");
             const list = await refresh();
             const r = list.find((x) => x.name === name);
             if (r && isOnline(r)) select(r);
@@ -322,11 +434,13 @@ export function StepReader({ state, update }: StepProps) {
 function AddReaderPanel({
   onClose,
   onAdded,
+  initialIp = "",
 }: {
   onClose: () => void;
   onAdded: (name: string) => void;
+  initialIp?: string;
 }) {
-  const [ip, setIp] = useState("");
+  const [ip, setIp] = useState(initialIp);
   const [pw, setPw] = useState("");
   const [field, setField] = useState<"ip" | "pw">("ip");
   const [busy, setBusy] = useState(false);
