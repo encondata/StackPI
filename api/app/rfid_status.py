@@ -45,6 +45,16 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 log = logging.getLogger(__name__)
 
+
+class ReaderTransportError(RuntimeError):
+    """No HTTP response from the reader — connection refused, TLS handshake
+    failure, or timeout. The only failure that triggers a scheme fallback."""
+
+
+class ReaderAuthError(RuntimeError):
+    """Reader was reachable but rejected the credentials (HTTP 401/403)."""
+
+
 DB_NAME = "stackpi"
 DB_USER = "csg"
 PSQL_TIMEOUT_SECONDS = 5
@@ -302,8 +312,10 @@ def _login(reader: Dict[str, Any]) -> str:
             timeout=LOGIN_TIMEOUT_SEC,
         )
     except requests.RequestException as e:
-        raise RuntimeError(f"login transport error: {type(e).__name__}: {e}")
+        raise ReaderTransportError(f"login transport error: {type(e).__name__}: {e}")
 
+    if resp.status_code in (401, 403):
+        raise ReaderAuthError(f"login HTTP {resp.status_code}: {resp.text[:200]}")
     if resp.status_code != 200:
         raise RuntimeError(f"login HTTP {resp.status_code}: {resp.text[:200]}")
 
