@@ -140,3 +140,46 @@ def test_discover_includes_name_and_cred_index(monkeypatch):
         {"ip": "10.0.0.1", "scheme": "https", "port": 443, "name": "FX9600X",
          "source": "scan", "confirmed": True, "cred_index": 0}
     ]
+
+
+def test_adopt_creates_reader_from_cred_index(monkeypatch):
+    from app.rfid import adopt_reader, AdoptReaderRequest
+    monkeypatch.setattr(rfid_status, "_login", lambda reader: "tok")
+    monkeypatch.setattr(rfid_status, "_get_name_and_description",
+                        lambda reader, token: {"name": "FX9600647D23",
+                                               "description": "FX9600 RFID Reader"})
+    captured = {}
+
+    def fake_create(body):
+        captured["body"] = body
+        return {"readers": [{"name": body.name}], "counts": {}}
+
+    monkeypatch.setattr(rfid_mod, "create_reader", fake_create)
+    out = adopt_reader(AdoptReaderRequest(address="10.10.48.119", scheme="https", cred_index=0))
+    assert captured["body"].name == "FX9600647D23"
+    assert captured["body"].admin_password == "Cumulu$SG0"
+    assert captured["body"].scheme == "https"
+    assert out["readers"][0]["name"] == "FX9600647D23"
+
+
+def test_adopt_out_of_range_cred_index_400(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from app.rfid import adopt_reader, AdoptReaderRequest
+    with pytest.raises(HTTPException) as ei:
+        adopt_reader(AdoptReaderRequest(address="10.0.0.5", scheme="https", cred_index=99))
+    assert ei.value.status_code == 400
+
+
+def test_adopt_login_failure_502(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from app.rfid import adopt_reader, AdoptReaderRequest
+
+    def boom(reader):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(rfid_status, "_login", boom)
+    with pytest.raises(HTTPException) as ei:
+        adopt_reader(AdoptReaderRequest(address="10.0.0.5", scheme="https", cred_index=0))
+    assert ei.value.status_code == 502

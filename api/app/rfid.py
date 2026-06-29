@@ -65,6 +65,12 @@ class ReaderCreateRequest(BaseModel):
     local_url: Optional[str] = Field(default=None, max_length=500)
 
 
+class AdoptReaderRequest(BaseModel):
+    address: str = Field(min_length=1, max_length=255)
+    scheme: str = Field(default="https", pattern=r"^https?$")
+    cred_index: int = Field(ge=0)
+
+
 class ReaderUpdateRequest(BaseModel):
     # Same shape as ReaderCreateRequest. admin_password is treated as
     # "no change" when blank (so the UI doesn't have to round-trip the
@@ -224,6 +230,43 @@ def create_reader(body: ReaderCreateRequest) -> Dict[str, Any]:
     if not _psql_exec_with_params(sql, params):
         raise HTTPException(status_code=500, detail="failed to insert reader")
     return list_readers()
+
+
+@router.post("/readers/adopt")
+def adopt_reader(body: AdoptReaderRequest) -> Dict[str, Any]:
+    """Create a reader the scan discovered, using a built-in default password
+    selected by index (so the password never crosses from the client). Logs in
+    once with that known-good password, reads the name, and persists the reader
+    via the normal create path."""
+    if body.cred_index >= len(_DEFAULT_READER_PASSWORDS):
+        raise HTTPException(status_code=400, detail="no default credential for this reader")
+    from app import rfid_status  # noqa: PLC0415
+
+    password = _DEFAULT_READER_PASSWORDS[body.cred_index]
+    scheme = (body.scheme or "https").strip().lower()
+    address = body.address.strip()
+    reader = {
+        "address": address,
+        "scheme": scheme,
+        "port": None,
+        "admin_username": "admin",
+        "admin_password": password,
+    }
+    try:
+        token = rfid_status._login(reader)
+        nd = rfid_status._get_name_and_description(reader, token)
+        name = _reader_name_from_nd(nd) or address
+    except Exception as e:  # noqa: BLE001
+        log.warning("reader adopt failed for %s: %s", address, e)
+        raise HTTPException(status_code=502, detail=f"could not adopt reader: {e}")
+
+    return create_reader(ReaderCreateRequest(
+        name=name,
+        address=address,
+        scheme=scheme,
+        admin_username="admin",
+        admin_password=password,
+    ))
 
 
 @router.put("/readers/{reader_id}")
