@@ -34,7 +34,6 @@ DB_NAME = "stackpi"
 DB_USER = "csg"
 PSQL_TIMEOUT_SECONDS = 5
 
-SCAN_DEFAULT_PORT = 443    # Zebra IoT Connector REST API (HTTPS)
 SCAN_PROBE_TIMEOUT_SEC = 0.4
 SCAN_MAX_WORKERS = 128
 SCAN_MAX_HOSTS = 2048
@@ -83,10 +82,6 @@ class ReaderUpdateRequest(BaseModel):
     production_url: Optional[str] = Field(default=None, max_length=500)
     local_method: OutputMethod = OutputMethod.API
     local_url: Optional[str] = Field(default=None, max_length=500)
-
-
-class ScanRequest(BaseModel):
-    port: int = Field(default=SCAN_DEFAULT_PORT, ge=1, le=65535)
 
 
 def _psql_json(sql: str) -> Any:
@@ -367,15 +362,16 @@ def _probe(host: str, port: int, timeout: float) -> Optional[str]:
             pass
 
 
-@router.post("/scan")
-def scan_for_readers(body: ScanRequest) -> Dict[str, Any]:
-    """Scan the Pi's primary subnet for hosts open on the given TCP port.
-    Discovery only — does not talk to the reader's REST API."""
+def _scheme_for_port(port: int) -> str:
+    return "https" if port == 443 else "http"
+
+
+def discover_readers() -> Dict[str, Any]:
+    """Scan the Pi's subnet on ports 80 and 443 and return only hosts confirmed
+    to be Zebra ZIOTC readers. Dedupes by IP, preferring https/443."""
     cidr = _primary_local_cidr()
     if not cidr:
-        raise HTTPException(
-            status_code=500, detail="could not determine local subnet"
-        )
+        raise HTTPException(status_code=500, detail="could not determine local subnet")
     try:
         net = ipaddress.ip_network(cidr, strict=False)
     except ValueError as e:
@@ -385,33 +381,74 @@ def scan_for_readers(body: ScanRequest) -> Dict[str, Any]:
     if len(hosts) > SCAN_MAX_HOSTS:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"subnet too large ({len(hosts)} hosts) — only /22 or smaller "
-                "is scanned"
-            ),
+            detail=(f"subnet too large ({len(hosts)} hosts) — only /22 or smaller is scanned"),
         )
 
     start = time.time()
-    responded: List[Dict[str, Any]] = []
+
+    # 1) Port scan both ports across all hosts.
+    open_ports: Dict[str, set] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as ex:
         futures = {
-            ex.submit(_probe, h, body.port, SCAN_PROBE_TIMEOUT_SEC): h
-            for h in hosts
+            ex.submit(_probe, h, p, SCAN_PROBE_TIMEOUT_SEC): (h, p)
+            for h in hosts for p in SCAN_PORTS
         }
+        for fut in concurrent.futures.as_completed(futures):
+            h, p = futures[fut]
+            try:
+                if fut.result():
+                    open_ports.setdefault(h, set()).add(p)
+            except Exception:
+                pass
+
+    # 2) Confirm each open host is a ZIOTC reader, preferring https/443.
+    def _confirm(ip: str, ports: set) -> Optional[Dict[str, Any]]:
+        for port in (443, 80):
+            if port in ports and _is_ziotc_reader(_scheme_for_port(port), ip):
+                return {
+                    "ip": ip,
+                    "scheme": _scheme_for_port(port),
+                    "port": port,
+                    "name": None,
+                    "source": "scan",
+                    "confirmed": True,
+                }
+        return None
+
+    readers: List[Dict[str, Any]] = []
+    unconfirmed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as ex:
+        futures = {ex.submit(_confirm, ip, ports): ip for ip, ports in open_ports.items()}
         for fut in concurrent.futures.as_completed(futures):
             try:
                 result = fut.result()
             except Exception:
                 result = None
             if result:
-                responded.append({"ip": result, "port": body.port})
-    responded.sort(key=lambda r: tuple(int(p) for p in r["ip"].split(".")))
+                readers.append(result)
+            else:
+                unconfirmed += 1
+
+    if unconfirmed:
+        log.info(
+            "reader scan: %d host(s) had a port open but failed the ZIOTC signature check",
+            unconfirmed,
+        )
+    readers.sort(key=lambda r: tuple(int(p) for p in r["ip"].split(".")))
     return {
         "subnet": str(net),
         "scanned_count": len(hosts),
-        "responded": responded,
+        "readers": readers,
         "took_seconds": round(time.time() - start, 1),
     }
+
+
+@router.post("/scan")
+def scan_for_readers() -> Dict[str, Any]:
+    """Discover Zebra RFID readers on the Pi's primary subnet. Scans ports 80
+    and 443 and returns only hosts confirmed via the credential-free ZIOTC
+    signature check."""
+    return discover_readers()
 
 
 # ---------------------------------------------------------------------------
