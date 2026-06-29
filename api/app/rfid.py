@@ -19,6 +19,10 @@ from enum import Enum
 from typing import Any, Dict, Generator, List, Optional
 
 import psycopg
+import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -34,6 +38,10 @@ SCAN_DEFAULT_PORT = 443    # Zebra IoT Connector REST API (HTTPS)
 SCAN_PROBE_TIMEOUT_SEC = 0.4
 SCAN_MAX_WORKERS = 128
 SCAN_MAX_HOSTS = 2048
+SCAN_PORTS = (80, 443)            # Zebra IoT Connector REST API (HTTP / HTTPS)
+ZIOTC_CONFIRM_TIMEOUT_SEC = 1.0
+# The ZIOTC server answers an unauthenticated /cloud/* call with this marker.
+_ZIOTC_AUTH_MARKER = "authorization header missing"
 
 
 class OutputMethod(str, Enum):
@@ -318,6 +326,30 @@ def _primary_local_cidr() -> Optional[str]:
                 continue
             return cidr
     return None
+
+
+def _is_ziotc_reader(scheme: str, ip: str, timeout: float = ZIOTC_CONFIRM_TIMEOUT_SEC) -> bool:
+    """Credential-free check that a host runs the Zebra ZIOTC REST API.
+
+    Hits GET {scheme}://{ip}/cloud/version with no Authorization header. The
+    ZIOTC server answers an unauthenticated /cloud/* call with a body that
+    mentions "Authorization header missing" (the documented signature); some
+    firmware phrases it as a jwt/authorization error. Returns False on any
+    connection error, timeout, or non-matching response.
+    """
+    url = f"{scheme}://{ip}/cloud/version"
+    try:
+        resp = requests.get(url, verify=False, timeout=timeout, allow_redirects=False)
+    except requests.RequestException:
+        return False
+    body = (resp.text or "").lower()
+    if _ZIOTC_AUTH_MARKER in body:
+        return True
+    # Tolerate firmware variation: a jwt + authorization/token error also marks
+    # the ZIOTC auth layer.
+    if "jwt" in body and ("authorization" in body or "token" in body):
+        return True
+    return False
 
 
 def _probe(host: str, port: int, timeout: float) -> Optional[str]:
