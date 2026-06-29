@@ -351,6 +351,28 @@ def _login(reader: Dict[str, Any]) -> str:
     return token
 
 
+def connect_autodetect(reader: Dict[str, Any], schemes=("https", "http")):
+    """Try each scheme in order; return (scheme, token) on first success.
+
+    Falls back to the next scheme ONLY on a transport error (no HTTP response).
+    A ReaderAuthError (bad password) or any other HTTP-level RuntimeError means
+    the reader was reachable on that scheme, so it propagates immediately rather
+    than being masked by a fallback. Raises RuntimeError if every scheme fails to
+    connect.
+    """
+    last_err = None
+    for scheme in schemes:
+        try:
+            token = _login({**reader, "scheme": scheme})
+            return scheme, token
+        except ReaderTransportError as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"could not reach reader over {'/'.join(schemes)}: {last_err}"
+    )
+
+
 def _get_status(reader: Dict[str, Any], token: str) -> Dict[str, Any]:
     """GET /cloud/status with the given bearer token. Returns parsed JSON.
     Raises RuntimeError on any non-2xx or unparseable response."""
