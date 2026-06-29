@@ -648,13 +648,30 @@ def put_endpoint_config(
     return {"ok": True, "reader_id": rid}
 
 
+# Per-endpoint batching/retention the FX9600 expects (verified live on a working
+# FX9600 3.29.x reader). The reader also keeps a GLOBAL READER-GATEWAY.batching /
+# .retention array with one object per endpoint connection; both must match the
+# connection count or a config PUT is rejected ("Incorrect number of batching
+# objects for the given endpoints").
+_DEFAULT_BATCHING: Dict[str, Any] = {"maxPayloadSizePerReport": 256000, "reportingInterval": 2000}
+_DEFAULT_RETENTION: Dict[str, Any] = {
+    "maxEventRetentionTimeInMin": 500,
+    "maxNumEvents": 150000,
+    "throttle": 100,
+}
+
 # The data connection StackPI creates when a reader has none. Mirrors the shape
 # a reader reports for an httpPost endpoint (verified live on FX9600 3.29.x): a
-# single options.URL plus no-auth security. Only the URL is filled in.
+# single options.URL plus no-auth security, and its own additionalOptions
+# batching/retention. Only the URL is filled in.
 _STACKPI_HTTP_CONNECTION: Dict[str, Any] = {
     "type": "httpPost",
     "name": "StackPI",
     "description": "Local StackPI",
+    "additionalOptions": {
+        "batching": dict(_DEFAULT_BATCHING),
+        "retention": dict(_DEFAULT_RETENTION),
+    },
     "options": {
         "URL": "",
         "security": {
@@ -705,6 +722,29 @@ def _apply_endpoint_url(config: Dict[str, Any], url: str) -> Dict[str, Any]:
         options = {}
         target["options"] = options
     options["URL"] = url
+
+    # Keep the reader's GLOBAL batching/retention arrays (one object per endpoint
+    # connection) in sync with the connection list. Prefer each connection's own
+    # additionalOptions value, then the existing global entry at that index, then
+    # the default. Without this the reader rejects the PUT with HTTP 422
+    # "Incorrect number of batching objects for the given endpoints".
+    def _sync_global(key: str, default: Dict[str, Any]) -> None:
+        existing = gateway.get(key)
+        existing = existing if isinstance(existing, list) else []
+        synced = []
+        for i, conn in enumerate(conns):
+            add = conn.get("additionalOptions") if isinstance(conn, dict) else None
+            per = add.get(key) if isinstance(add, dict) else None
+            if isinstance(per, dict):
+                synced.append(per)
+            elif i < len(existing) and isinstance(existing[i], dict):
+                synced.append(existing[i])
+            else:
+                synced.append(dict(default))
+        gateway[key] = synced
+
+    _sync_global("batching", _DEFAULT_BATCHING)
+    _sync_global("retention", _DEFAULT_RETENTION)
     return config
 
 
