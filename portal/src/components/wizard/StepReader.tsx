@@ -343,7 +343,7 @@ function AddReaderPanel({
         body: JSON.stringify({ address: ip, password: pw }),
       });
       const pb = (await pr.json().catch(() => null)) as
-        | { hostname?: string; detail?: string }
+        | { hostname?: string; scheme?: string; detail?: string }
         | null;
       if (!pr.ok) {
         setError(pb?.detail ?? "Could not reach reader.");
@@ -357,7 +357,7 @@ function AddReaderPanel({
           name: hostname,
           address: ip,
           admin_password: pw,
-          scheme: "https",
+          scheme: pb?.scheme ?? "https",
         }),
       });
       if (!cr.ok) {
@@ -407,7 +407,7 @@ function AddReaderPanel({
           </button>
         </div>
         <p className="mb-2 text-[11px] text-zinc-500">
-          Name is read from the reader’s hostname on connect. admin user defaults to “admin”; https:443.
+          Name is read from the reader’s hostname on connect. admin user defaults to “admin”; scheme is detected automatically (HTTPS, then HTTP).
         </p>
         {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
         <div className="mb-3">
