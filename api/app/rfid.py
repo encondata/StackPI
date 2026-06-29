@@ -425,11 +425,12 @@ class ReaderProbeRequest(BaseModel):
     admin_username: str = Field(default="admin", max_length=64)
 
 
-def _extract_hostname(status: Dict[str, Any]) -> Optional[str]:
-    # The Zebra status field that carries the reader's hostname/name is not yet
-    # confirmed against the live FX9600 — try the likely keys and fall back to
-    # the address. The raw status is returned by probe_reader so the exact
-    # field can be finalized during live verification on the Pi.
+def _extract_hostname(obj: Dict[str, Any]) -> Optional[str]:
+    # Generic name extractor, applied to the /cloud/nameAndDescription body
+    # first and then /cloud/status as a fallback. The exact key the FX9600 uses
+    # is not pinned across firmware, so try the likely ones in preference order
+    # (human name before opaque id/serial) and return None if none are present.
+    status = obj
     if not isinstance(status, dict):
         return None
     # Prefer a human-friendly name over an opaque id/serial.
@@ -465,8 +466,26 @@ def probe_reader(body: ReaderProbeRequest) -> Dict[str, Any]:
     except Exception as e:
         log.warning("reader probe failed for %s: %s", reader["address"], e)
         raise HTTPException(status_code=502, detail=f"could not reach reader: {e}")
-    hostname = _extract_hostname(status) or reader["address"]
-    return {"ok": True, "scheme": scheme, "hostname": hostname, "status": status}
+
+    # The reader's human-readable name lives at /cloud/nameAndDescription on
+    # 3.29.x firmware, not in /cloud/status. Prefer that; fall back to any name
+    # field in status, then to the address. Best-effort — a nameAndDescription
+    # failure must not fail the probe (reachability already succeeded above).
+    name_and_description = None
+    name = None
+    try:
+        name_and_description = rfid_status._get_name_and_description(reader, token)
+        name = _extract_hostname(name_and_description)
+    except Exception as e:  # noqa: BLE001 - naming is best-effort
+        log.warning("nameAndDescription fetch failed for %s: %s", reader["address"], e)
+    hostname = name or _extract_hostname(status) or reader["address"]
+    return {
+        "ok": True,
+        "scheme": scheme,
+        "hostname": hostname,
+        "status": status,
+        "name_and_description": name_and_description,
+    }
 
 
 # ---------------------------------------------------------------------------

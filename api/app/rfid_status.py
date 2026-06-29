@@ -400,6 +400,40 @@ def _get_status(reader: Dict[str, Any], token: str) -> Dict[str, Any]:
     return body
 
 
+def _get_name_and_description(reader: Dict[str, Any], token: str) -> Dict[str, Any]:
+    """GET /cloud/nameAndDescription — the reader's configured name/description.
+
+    This is where the FX9600 carries its human-readable name on firmware 3.29.x
+    (``/cloud/hostname`` does not exist there and ``/cloud/status`` does not
+    include the name). Returns the parsed JSON object. Raises RuntimeError on any
+    non-2xx or unparseable response; callers that only want a best-effort name
+    should catch and fall back."""
+    url = f"{_base_url(reader)}/cloud/nameAndDescription"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            verify=False,
+            timeout=STATUS_TIMEOUT_SEC,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"nameAndDescription transport error: {type(e).__name__}: {e}")
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"nameAndDescription HTTP {resp.status_code}: {resp.text[:200]}")
+
+    try:
+        body = resp.json()
+    except ValueError:
+        raise RuntimeError(f"nameAndDescription non-JSON body: {resp.text[:200]}")
+
+    if not isinstance(body, dict):
+        raise RuntimeError(
+            f"nameAndDescription payload not a JSON object: {type(body).__name__}"
+        )
+    return body
+
+
 # ---------------------------------------------------------------------------
 # Control + mode (PUT /cloud/start, PUT /cloud/stop, GET /cloud/mode)
 # ---------------------------------------------------------------------------
