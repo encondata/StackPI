@@ -171,8 +171,8 @@ case "$cmd" in
     ;;
 
   set-ntp-servers)
-    # Remaining args = list of server hostnames/IPs. Zero args clears the
-    # drop-in (falls back to Debian pool defaults).
+    # Remaining args = list of server hostnames/IPs. Zero args resets the
+    # drop-in to the StackPI default (pool.ntp.org).
     DROPIN_DIR=/etc/systemd/timesyncd.conf.d
     DROPIN=$DROPIN_DIR/stackpi.conf
     if [[ $# -eq 0 ]]; then
