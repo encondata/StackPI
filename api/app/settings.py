@@ -556,6 +556,19 @@ def _persist_setting(key: str, value: str) -> bool:
     return _psql_exec(sql)
 
 
+TIMEZONE_AUTO_KEY = "timezone_auto"
+
+
+def get_timezone_auto() -> bool:
+    """Whether the timezone is auto-detected from the device location (on by
+    default). A manual timezone set turns this off."""
+    return _get_setting_str(TIMEZONE_AUTO_KEY, "1") == "1"
+
+
+def set_timezone_auto(enabled: bool) -> bool:
+    return _persist_setting(TIMEZONE_AUTO_KEY, "1" if enabled else "0")
+
+
 def _get_screen_status_payload() -> Dict[str, Any]:
     _border_style = _get_setting_str(
         _SCREEN_STATUS_KEY_BORDER_STYLE,
