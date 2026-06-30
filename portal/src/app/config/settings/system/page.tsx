@@ -407,11 +407,8 @@ export default function SystemSettingsPage() {
               NTP servers (override)
             </p>
             <p className="mt-1 text-xs text-zinc-500">
-              Comma- or space-separated hostnames/IPs. Leave empty to use
-              system defaults (debian.pool.ntp.org).
-            </p>
-            <p className="mt-1 text-xs text-zinc-500">
-              Default: <code className="font-mono">pool.ntp.org</code>. Leave blank to use it.
+              Comma- or space-separated hostnames/IPs. Default:{" "}
+              <code className="font-mono">pool.ntp.org</code>. Leave blank to use it.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <input
