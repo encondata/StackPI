@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ReaderSiteScanSection } from "@/components/settings/ReaderSiteScanSection";
 
 type Overview = {
   rfid_tags_scanned: number;
@@ -307,6 +308,8 @@ export default function ConfigOverview() {
           )}
         </p>
       </section>
+
+      <ReaderSiteScanSection />
     </div>
   );
 }
