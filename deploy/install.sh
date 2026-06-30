@@ -143,6 +143,19 @@ info "Enabling system services"
 systemctl enable --now postgresql
 ok "postgresql enabled"
 
+# --- NTP default: pool.ntp.org -------------------------------------------
+# Seed the StackPI timesyncd drop-in so fresh devices use pool.ntp.org rather
+# than the Debian pool. Skips if a drop-in already exists (operator override).
+TIMESYNCD_DROPIN_DIR=/etc/systemd/timesyncd.conf.d
+TIMESYNCD_DROPIN="$TIMESYNCD_DROPIN_DIR/stackpi.conf"
+if [[ ! -f "$TIMESYNCD_DROPIN" ]]; then
+  mkdir -p "$TIMESYNCD_DROPIN_DIR"
+  { printf '[Time]\n'; printf 'NTP=pool.ntp.org\n'; } > "$TIMESYNCD_DROPIN"
+  chmod 0644 "$TIMESYNCD_DROPIN"
+  systemctl restart systemd-timesyncd || true
+  echo "[install] seeded NTP default pool.ntp.org"
+fi
+
 ###############################################################################
 # Summary
 ###############################################################################

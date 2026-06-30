@@ -176,9 +176,13 @@ case "$cmd" in
     DROPIN_DIR=/etc/systemd/timesyncd.conf.d
     DROPIN=$DROPIN_DIR/stackpi.conf
     if [[ $# -eq 0 ]]; then
-      rm -f "$DROPIN"
+      # No custom override -> reset to the StackPI default (pool.ntp.org),
+      # not the distro's Debian pool.
+      mkdir -p "$DROPIN_DIR"
+      { printf '[Time]\n'; printf 'NTP=pool.ntp.org\n'; } > "$DROPIN"
+      chmod 0644 "$DROPIN"
       systemctl restart systemd-timesyncd
-      echo "ntp: cleared override, using defaults"
+      echo "ntp: reset to default pool.ntp.org"
       exit 0
     fi
     for s in "$@"; do
