@@ -42,8 +42,8 @@ from app.hardware import get_hardware_serial
 
 log = logging.getLogger(__name__)
 
-_USER_AGENT = "stackpi-engine/0.1.0"
-_VERSION_FALLBACK = "engine-0.1.0"
+_USER_AGENT = "stackpi-engine/0.2.0"
+_VERSION_FALLBACK = "engine-0.2.0"
 
 
 @lru_cache(maxsize=1)
