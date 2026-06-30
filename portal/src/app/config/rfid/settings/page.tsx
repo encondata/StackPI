@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertSettingsSection } from "@/components/settings/AlertSettingsSection";
+import { ReaderSiteScanSection } from "@/components/settings/ReaderSiteScanSection";
 
 type RFIDSettings = {
   rfid_polling_refresh_minutes: number;
@@ -200,6 +201,7 @@ export default function RFIDSettingsPage() {
         )}
       </section>
 
+      <ReaderSiteScanSection />
       <AlertSettingsSection />
 
       <div className="flex justify-end">
