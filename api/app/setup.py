@@ -15,7 +15,11 @@ Auth posture mirrors app.portal_sync._fetch_endpoint:
     502 (upstream error), transport failure -> 502, missing token -> 409
     (device not registered yet).
 """
+import json
 import logging
+import os
+import tempfile
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
@@ -28,6 +32,58 @@ log = logging.getLogger("stackpi.setup")
 router = APIRouter(prefix="/local/setup", tags=["local-setup"])
 
 _TIMEOUT = 10
+
+# Durable reader site/scan-type snapshot. Stored on the systemd StateDirectory
+# (NOT local_app_settings, which is tmpfs and loses recent writes on a power
+# cut) so the config page can show the current setting across reboots. Mirrors
+# the active_selection.json pattern in app.local.
+_READER_SETTINGS_FILE = Path("/var/lib/stackpi/reader_settings.json")
+_EMPTY_READER_SETTINGS: Dict[str, Any] = {
+    "reader_name": None, "site_id": None, "site_name": None,
+    "scan_type_id": None, "scan_type_name": None,
+}
+
+
+def _read_reader_settings() -> Dict[str, Any]:
+    """Return the persisted snapshot, or all-None if missing/unparseable."""
+    try:
+        with _READER_SETTINGS_FILE.open("r", encoding="utf-8") as f:
+            parsed = json.load(f)
+    except (OSError, ValueError):
+        return dict(_EMPTY_READER_SETTINGS)
+    if not isinstance(parsed, dict):
+        return dict(_EMPTY_READER_SETTINGS)
+    return {k: parsed.get(k) for k in _EMPTY_READER_SETTINGS}
+
+
+def _write_reader_settings(payload: Dict[str, Any]) -> bool:
+    """Atomically replace the snapshot file. Returns False on any IO failure."""
+    try:
+        _READER_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".reader_settings.", suffix=".tmp",
+            dir=str(_READER_SETTINGS_FILE.parent),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, separators=(",", ":"))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, _READER_SETTINGS_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        try:
+            os.chmod(_READER_SETTINGS_FILE, 0o640)
+        except OSError:
+            pass
+    except OSError as e:
+        log.warning("reader_settings: write failed: %s", e)
+        return False
+    return True
 
 
 def _is_json(resp) -> bool:
@@ -104,6 +160,8 @@ class ReaderSettingsRequest(BaseModel):
     reader_name: str = Field(min_length=1, max_length=255)
     site_id: int
     scan_type_id: int
+    site_name: Optional[str] = Field(default=None, max_length=255)
+    scan_type_name: Optional[str] = Field(default=None, max_length=255)
 
 
 # local_app_settings key recording which reader the kiosk home card controls.
@@ -129,4 +187,19 @@ def set_reader_settings(body: ReaderSettingsRequest) -> Dict[str, Any]:
 
     if not _persist_setting(ACTIVE_READER_NAME_KEY, body.reader_name.strip()):
         log.warning("failed to persist %s=%r", ACTIVE_READER_NAME_KEY, body.reader_name)
+    snapshot = {
+        "reader_name": body.reader_name.strip(),
+        "site_id": body.site_id,
+        "site_name": (body.site_name or "").strip() or None,
+        "scan_type_id": body.scan_type_id,
+        "scan_type_name": (body.scan_type_name or "").strip() or None,
+    }
+    if not _write_reader_settings(snapshot):
+        log.warning("failed to persist reader settings snapshot")
     return result
+
+
+@router.get("/reader-settings")
+def get_reader_settings() -> Dict[str, Any]:
+    """Return the persisted reader site/scan-type snapshot (or all-None)."""
+    return _read_reader_settings()
