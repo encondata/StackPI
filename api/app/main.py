@@ -26,11 +26,14 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # Status snapshot multicast broadcaster (5s heartbeat + on-change).
     from app import status_broadcast  # noqa: PLC0415
+    from app import tz_auto  # noqa: PLC0415
 
     task = status_broadcast.start()
+    tz_task = tz_auto.start()
     try:
         yield
     finally:
+        await tz_auto.stop(tz_task)
         await status_broadcast.stop(task)
 
 

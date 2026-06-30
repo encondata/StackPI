@@ -99,6 +99,10 @@ class NTPRequest(BaseModel):
     servers: Optional[List[str]] = None
 
 
+class TimezoneAutoRequest(BaseModel):
+    enabled: bool
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -779,6 +783,7 @@ def get_time_status() -> Dict[str, Any]:
         "synchronized":   status.get("synchronized") == "yes",
         "current_server": status.get("current_server") or None,
         "ntp_servers_override": servers,  # empty list = using defaults
+        "timezone_auto": get_timezone_auto(),
     }
 
 
@@ -791,6 +796,7 @@ def set_timezone(body: TimezoneRequest) -> Dict[str, Any]:
             detail="bad timezone format; expected e.g. America/Chicago",
         )
     _run_helper("set-timezone", tz)
+    set_timezone_auto(False)  # a manual set is an override
     return get_time_status()
 
 
@@ -805,6 +811,15 @@ def set_ntp_servers(body: NTPRequest) -> Dict[str, Any]:
             )
     args = ["set-ntp-servers", *servers]
     _run_helper(*args, timeout=30)
+    return get_time_status()
+
+
+@router.post("/time/timezone-auto")
+def set_timezone_auto_route(body: TimezoneAutoRequest) -> Dict[str, Any]:
+    set_timezone_auto(body.enabled)
+    if body.enabled:
+        from app import tz_auto  # noqa: PLC0415
+        tz_auto.apply_once()  # detect immediately on enable (best-effort)
     return get_time_status()
 
 
