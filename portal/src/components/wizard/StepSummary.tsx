@@ -96,6 +96,8 @@ export function StepSummary({
           reader_name: state.readerName,
           site_id: state.siteId,
           scan_type_id: state.scanTypeId,
+          site_name: state.siteName,
+          scan_type_name: state.scanTypeName,
         }),
       });
       if (r.ok) {
