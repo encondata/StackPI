@@ -18,6 +18,7 @@ type TimeStatus = {
   synchronized: boolean;
   current_server: string | null;
   ntp_servers_override: string[];
+  timezone_auto: boolean;
 };
 
 const TIME_REFRESH_MS = 10_000;
@@ -197,6 +198,26 @@ export default function SystemSettingsPage() {
     }
   }
 
+  async function saveTimezoneAuto(enabled: boolean) {
+    setBusy("timezone");
+    try {
+      const res = await fetch("/local/settings/time/timezone-auto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+      if (res.ok) {
+        flash("success", enabled ? "Automatic timezone enabled." : "Automatic timezone disabled.");
+        await refreshTime();
+      } else {
+        flash("error", body?.detail ?? "Failed to update automatic timezone.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function saveDeviceStatus() {
     const min = statusMeta?.interval_seconds_min ?? 10;
     const max = statusMeta?.interval_seconds_max ?? 300;
@@ -318,6 +339,15 @@ export default function SystemSettingsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Timezone
             </p>
+            <label className="mt-2 flex items-center gap-2 text-sm text-zinc-700">
+              <input
+                type="checkbox"
+                checked={Boolean(time?.timezone_auto)}
+                onChange={(e) => saveTimezoneAuto(e.target.checked)}
+                disabled={busy !== null}
+              />
+              Set automatically from internet location
+            </label>
             <p className="mt-1 text-xs text-zinc-500">
               Current:{" "}
               <code className="font-mono">{time?.timezone ?? "—"}</code>
@@ -379,6 +409,9 @@ export default function SystemSettingsPage() {
             <p className="mt-1 text-xs text-zinc-500">
               Comma- or space-separated hostnames/IPs. Leave empty to use
               system defaults (debian.pool.ntp.org).
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Default: <code className="font-mono">pool.ntp.org</code>. Leave blank to use it.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <input
